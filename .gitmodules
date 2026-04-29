@@ -1,0 +1,3 @@
+[submodule "reference/NeoDK"]
+	path = reference/NeoDK
+	url = https://github.com/Onwrikbaar/NeoDK.git
