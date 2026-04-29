@@ -19,7 +19,7 @@ En DAW-likt klient för **NeoDK** — en open-source e-stim dev-board (https://g
 ### Repo-struktur
 - StimDAW = egen klient, eget release-tempo
 - Modifierar inte firmware eller hårdvara → ingen fork-soppa
-- Kan teoretiskt stötta andra e-stim-protokoll i framtiden (zc95, FOC-Stim, etc.)
+- **NeoDK-only** (beslut 2026-04-29). Ingen abstraktion för andra e-stim-protokoll (zc95, FOC-Stim, ET-312). Fokus på den hårdvara vi faktiskt har — inga "framtida flexibilitet"-lager som inte används.
 
 ### DAW-likt streaming-mönster
 ```
@@ -220,7 +220,7 @@ on tick (var 5–10 ms):
 1. **Tech stack-beslut** (se "Tekniska val" ovan)
 2. **Generator graph design** — plug-in-system? Hardcoded moduler? Hur exponerar vi parametrar för automation?
 3. **`.stimdaw`-filformat** — JSON med versioning? Diffable för git?
-4. **Multi-device support** — flera NeoDK samtidigt på olika serial ports?
+4. ~~Multi-device support~~ — *NeoDK-only, en enhet i taget. Beslut 2026-04-29.*
 5. **Tester** — hur testa scheduler-logik utan riktig hårdvara? Mock-firmware?
 6. **Säkerhetsmodellen** — vilka safety checks är hard-coded vs. user-overridable?
 
