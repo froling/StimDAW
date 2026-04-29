@@ -65,16 +65,16 @@ test('client: writeIntensity → fw state mutates → intensity event echoes', a
   await fwT.open();
 
   const client = new NeoDKClient(clientT);
-  let echoed: number | null = null;
+  const captured = { intensity: null as number | null };
   client.on('intensity', (n) => {
-    echoed = n;
+    captured.intensity = n;
   });
   await client.connect();
   await client.writeIntensity(75);
   await flush();
   await flush();
 
-  expect(echoed).toBe(75);
+  expect(captured.intensity).toBe(75);
   expect(fw.getState().intensityPercent).toBe(75);
 
   await client.disconnect();

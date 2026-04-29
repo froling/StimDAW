@@ -1,58 +1,96 @@
 <script lang="ts">
+  import { onMount } from 'svelte';
+  import { connectMock } from './ui/stores.svelte';
+  import ConnectionBanner from './ui/ConnectionBanner.svelte';
+  import StopButton from './ui/StopButton.svelte';
+  import Monitor from './ui/Monitor.svelte';
+  import IntensitySlider from './ui/IntensitySlider.svelte';
+  import Cli from './ui/Cli.svelte';
   import { createLogger } from './log';
 
   const log = createLogger('app');
-  log.info('StimDAW α started');
+
+  onMount(() => {
+    log.info('StimDAW α started — auto-connecting to mock');
+    void connectMock();
+  });
 </script>
 
-<main>
-  <header>
+<header class="topbar">
+  <div class="brand">
     <h1>StimDAW <span class="version">α</span></h1>
-  </header>
+    <span class="subtitle">mock-driven · NeoDK-only</span>
+  </div>
+  <StopButton />
+</header>
 
-  <section class="status">
-    <p>
-      Wedge α: live monitor + CLI passthrough. Implementation pending —
-      bootstrap is up.
-    </p>
-    <p class="muted">
-      See
-      <a href="https://github.com/froling/StimDAW/blob/main/docs/designs/ALPHA_WEDGE.md"
-        >ALPHA_WEDGE plan</a
-      >
-      for next steps.
-    </p>
-  </section>
+<main>
+  <ConnectionBanner />
+
+  <div class="grid">
+    <Monitor />
+    <IntensitySlider />
+    <div class="col-span-2">
+      <Cli />
+    </div>
+  </div>
 </main>
 
 <style>
-  main {
-    max-width: 720px;
-    margin: 4rem auto;
-    padding: 0 1.5rem;
+  :global(body) {
+    background: #f5f5f7;
+  }
+  .topbar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 1rem 1.5rem;
+    background: white;
+    border-bottom: 1px solid #e5e5e5;
+    position: sticky;
+    top: 0;
+    z-index: 10;
+  }
+  .brand {
+    display: flex;
+    align-items: baseline;
+    gap: 0.75rem;
+  }
+  h1 {
+    margin: 0;
+    font-size: 1.5rem;
     font-family:
       system-ui,
-      -apple-system,
       sans-serif;
-  }
-  header h1 {
-    margin: 0 0 1.5rem;
-    font-size: 2.25rem;
   }
   .version {
     color: #888;
     font-weight: 400;
     font-size: 0.7em;
   }
-  .status {
-    color: #333;
-    line-height: 1.5;
+  .subtitle {
+    color: #888;
+    font-size: 0.85rem;
   }
-  .muted {
-    color: #777;
-    font-size: 0.9rem;
+  main {
+    max-width: 960px;
+    margin: 0 auto;
+    padding: 1.25rem;
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
   }
-  a {
-    color: #0066cc;
+  .grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1rem;
+  }
+  .col-span-2 {
+    grid-column: 1 / -1;
+  }
+  @media (max-width: 720px) {
+    .grid {
+      grid-template-columns: 1fr;
+    }
   }
 </style>

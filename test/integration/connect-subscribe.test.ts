@@ -92,7 +92,7 @@ test('integration: write IntensityPercent → state mutates, ReportData echoes',
   await client.open();
 
   const parser = new FrameParser();
-  let echoedIntensity: number | null = null;
+  const captured = { intensity: null as number | null };
   client.on((event) => {
     if (event.type !== 'data') return;
     for (const frame of parser.push(event.bytes)) {
@@ -101,7 +101,7 @@ test('integration: write IntensityPercent → state mutates, ReportData echoes',
       const opcode = frame.payload[offset + 2]!;
       const attrId = frame.payload[offset + 4]! | (frame.payload[offset + 5]! << 8);
       if (opcode === OPCode.ReportData && attrId === AttributeId.IntensityPercent) {
-        echoedIntensity = decodeUInt1(
+        captured.intensity = decodeUInt1(
           frame.payload.slice(PACKET_HEADER_SIZE + ATTRIBUTE_ACTION_SIZE),
         );
       }
@@ -122,7 +122,7 @@ test('integration: write IntensityPercent → state mutates, ReportData echoes',
   await flush();
   await flush();
 
-  expect(echoedIntensity).toBe(75);
+  expect(captured.intensity).toBe(75);
   expect(fw.getState().intensityPercent).toBe(75);
   fw.detach();
 });
@@ -135,7 +135,7 @@ test('integration: debug command "/5" sets intensity 50 and echoes via subscript
   await client.open();
 
   const parser = new FrameParser();
-  let intensity: number | null = null;
+  const captured = { intensity: null as number | null };
   client.on((event) => {
     if (event.type !== 'data') return;
     for (const frame of parser.push(event.bytes)) {
@@ -144,7 +144,9 @@ test('integration: debug command "/5" sets intensity 50 and echoes via subscript
       const opcode = frame.payload[offset + 2]!;
       const attrId = frame.payload[offset + 4]! | (frame.payload[offset + 5]! << 8);
       if (opcode === OPCode.ReportData && attrId === AttributeId.IntensityPercent) {
-        intensity = decodeUInt1(frame.payload.slice(PACKET_HEADER_SIZE + ATTRIBUTE_ACTION_SIZE));
+        captured.intensity = decodeUInt1(
+          frame.payload.slice(PACKET_HEADER_SIZE + ATTRIBUTE_ACTION_SIZE),
+        );
       }
     }
   });
@@ -164,6 +166,6 @@ test('integration: debug command "/5" sets intensity 50 and echoes via subscript
   await flush();
 
   expect(fw.getState().intensityPercent).toBe(50);
-  expect(intensity).toBe(50);
+  expect(captured.intensity).toBe(50);
   fw.detach();
 });
