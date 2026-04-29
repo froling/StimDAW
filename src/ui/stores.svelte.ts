@@ -6,6 +6,7 @@ import { MaxCeiling } from '../safety/max-ceiling';
 import { StopWatchdog } from '../safety/stop-watchdog';
 import { AttributeId } from '../protocol/opcodes';
 import type { Voltages } from '../protocol/attributes';
+import { loadSettings, saveSettings } from '../fileformat/io';
 import { createLogger } from '../log';
 
 const log = createLogger('ui-store');
@@ -43,6 +44,20 @@ class AppState {
 }
 
 export const app = new AppState();
+
+// Hydrate persisted settings on module load (per A5=A: säkerhetsdefaults persisterar)
+const persisted = loadSettings();
+if (persisted) {
+  app.rampUpDurationMs = persisted.rampUpDurationMs;
+  app.ceiling = persisted.maxCeilingPercent;
+}
+
+function persistSettings(): void {
+  saveSettings({
+    rampUpDurationMs: app.rampUpDurationMs,
+    maxCeilingPercent: app.ceiling,
+  });
+}
 
 let client: NeoDKClient | null = null;
 let mockFw: MockFirmware | null = null;
@@ -172,19 +187,21 @@ export function setDesiredIntensity(value: number): void {
 export function setCeiling(value: number): void {
   if (!ceiling) {
     app.ceiling = Math.max(0, Math.min(100, value));
-    return;
+  } else {
+    ceiling.set(value);
+    app.ceiling = ceiling.get();
   }
-  ceiling.set(value);
-  app.ceiling = ceiling.get();
   // If desired is now above ceiling, snap it down
   if (app.desiredIntensity > app.ceiling) {
     setDesiredIntensity(app.ceiling);
   }
+  persistSettings();
 }
 
 export function setRampUpDuration(ms: number): void {
   app.rampUpDurationMs = Math.max(0, ms);
   ramp?.setRampUpDuration(app.rampUpDurationMs);
+  persistSettings();
 }
 
 export async function sendDebug(cmd: string): Promise<void> {
