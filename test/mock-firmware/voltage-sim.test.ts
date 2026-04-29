@@ -1,13 +1,16 @@
 import { test, expect } from 'bun:test';
 import { VoltageSim } from '../../src/mock-firmware/voltage-sim';
 
-test('voltage-sim: idle state has Vbat near 8800mV, Vcap near 0', () => {
+test('voltage-sim: idle state has Vbat near 8800mV, Vcap near 0, Iprim small', () => {
   const sim = new VoltageSim();
   const r = sim.read();
+  // Vbat baseline 8800 ± 50mV jitter
   expect(r.Vbat_mV).toBeGreaterThan(8500);
   expect(r.Vbat_mV).toBeLessThan(9100);
+  // Vcap idle: ~0 + jitter (clamped to [0, ~50])
   expect(r.Vcap_mV).toBeLessThan(200);
-  expect(r.Iprim_mA).toBe(0);
+  // Iprim idle: 0 + jitter ±20mA, clamped to [0, ~20]
+  expect(r.Iprim_mA).toBeLessThan(50);
 });
 
 test('voltage-sim: Vcap rises toward target when playing at 50%', () => {
