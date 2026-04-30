@@ -22,6 +22,7 @@
 import type { PtDescriptor } from '../protocol/descriptor';
 import type { Elcon } from '../patterns/types';
 import { elconId } from '../patterns/types';
+import { clampAmp } from '../safety/clamp';
 
 export interface WaveformSample {
   /** Sim-time i mikrosekunder (absolute, från SimClock-start). */
@@ -174,27 +175,6 @@ export class WaveformGenerator {
   }
 }
 
-/**
- * Single chokepoint amp clamp per outside-voice #3.
- * effective = floor(descriptorAmp × rampPercent/100 × ceilingPercent/100)
- * capped at 255 (hardware byte max).
- *
- * Standalone funktion för att kunna unit-testa isolerat. ramp-controller
- * och max-ceiling kan ej överskrida denna gräns oavsett bugg.
- */
-export function clampAmp(
-  descriptorAmplitude: number,
-  rampPercent: number,
-  ceilingPercent: number,
-): number {
-  if (!Number.isFinite(descriptorAmplitude) || descriptorAmplitude <= 0) return 0;
-  if (!Number.isFinite(rampPercent) || rampPercent <= 0) return 0;
-  if (!Number.isFinite(ceilingPercent) || ceilingPercent <= 0) return 0;
-
-  const rampClamped = Math.min(100, Math.max(0, rampPercent));
-  const ceilingClamped = Math.min(100, Math.max(0, ceilingPercent));
-  const ampClamped = Math.min(255, Math.max(0, descriptorAmplitude));
-
-  const product = (ampClamped * rampClamped * ceilingClamped) / (100 * 100);
-  return Math.min(255, Math.max(0, Math.floor(product)));
-}
+// clampAmp flyttad till src/safety/clamp.ts per eng-review 2.3A.
+// Re-export här för bakåtkompat med befintliga imports (test/mock-firmware/waveform.test.ts).
+export { clampAmp } from '../safety/clamp';
