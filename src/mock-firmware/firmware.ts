@@ -35,8 +35,6 @@ export interface MockFirmwareOptions {
   voltageEmitIntervalMs?: number;
   /** Auto-start the simulation clock in real-time mode. Default true. */
   realtime?: boolean;
-  /** PT-descriptor dispatcher tick interval in simulated ms. Default 5. */
-  ptDispatcherTickMs?: number;
 }
 
 /**
@@ -71,13 +69,18 @@ export class MockFirmware {
   private opts: Required<MockFirmwareOptions>;
   private ptQueue = new PtQueue();
   private dispatched: DispatchedDescriptor[] = [];
-  private ptDispatcherScheduled = false;
+  /**
+   * Generation counter — bumpas vid drain. Schedulerade events captures sin
+   * generation och no-op:ar om aktuell !== captured (descriptor draina'd
+   * mellan enqueue och fire). Detta ersätter en manuell event-cancellation,
+   * SimClock har ingen sådan API.
+   */
+  private ptQueueGeneration = 0;
 
   constructor(opts: MockFirmwareOptions = {}) {
     this.opts = {
       voltageEmitIntervalMs: opts.voltageEmitIntervalMs ?? 100,
       realtime: opts.realtime ?? true,
-      ptDispatcherTickMs: opts.ptDispatcherTickMs ?? 5,
     };
   }
 
@@ -91,7 +94,8 @@ export class MockFirmware {
     });
     if (this.opts.realtime) this.clock.startRealtime();
     this.scheduleVoltageEmit();
-    this.schedulePtDispatcher();
+    // Inget tick-based dispatcher behövs — varje enqueue schedulerar sin
+    // egen dispatch-event vid descriptor.startTimeMicros (event-driven).
   }
 
   detach(): void {
@@ -255,9 +259,10 @@ export class MockFirmware {
   }
 
   /**
-   * Dekoda inkommande descriptor-bytes och enqueue:a i sub-queue.
-   * Tysta varningar vid decode-fel eller short-circuit (matchar firmwarebeteende
-   * där PE_NONE-fel tyst loggas och dropas).
+   * Dekoda inkommande descriptor-bytes, enqueue:a i sub-queue, och schemalägg
+   * dispatch via SimClock vid descriptor.startTimeMicros.
+   * Tysta varningar vid decode-fel eller short-circuit (matchar firmware
+   * PE_NONE-beteende där fel tyst loggas och dropas).
    */
   private handlePtDescriptorWrite(data: Uint8Array): void {
     let descriptor: PtDescriptor;
@@ -271,8 +276,12 @@ export class MockFirmware {
       throw e;
     }
 
+    let accepted = false;
+    let queueIdx: 0 | 1 = 0;
     try {
       const result = this.ptQueue.enqueue(descriptor);
+      accepted = result.accepted;
+      queueIdx = result.queueIdx as 0 | 1;
       if (result.accepted) {
         log.debug(
           `PtQueue enqueue seq=${descriptor.sequenceNumber} q${result.queueIdx} (free=${result.freeAfter})`,
@@ -291,47 +300,47 @@ export class MockFirmware {
     }
     // Notify host om free-space efter enqueue (även vid drop, så host kan re-evaluera).
     this.notifyPtQueueFreeSpace();
+    if (accepted) {
+      this.scheduleDescriptorDispatch(descriptor, queueIdx);
+    }
   }
 
   /**
-   * Schemalägg dispatcher-tick. Tickar var ptDispatcherTickMs och drar ut alla
-   * descriptors vars startTime ≤ simNow. Real firmware schemalägger varje burst
-   * exakt; mock approximera med en tick-baserad polling-loop som är tillräckligt
-   * fin för test-purposes (5ms granularitet).
+   * Schemalägg dispatch av en specifik descriptor vid dess startTimeMicros.
+   * Detta speglar firmware sequencer.c:s scheduleFirstBurst/scheduleNextBurst
+   * som anropar BSP_startSequencerClock(start_time_µs) — dispatch sker exakt
+   * vid descriptorns angivna tid, inte tick-aligned.
+   *
+   * Generation-pattern: capture aktuell generation. Om drainPtQueue() bumpar
+   * generationen mellan enqueue och fire blir den schemalagda eventen no-op
+   * (descriptorn dräna's). Detta är vår event-cancellation eftersom SimClock
+   * inte har en sådan API.
+   *
+   * Past-due descriptors (startTime < simNow) clampas till simNow så de
+   * dispatchas vid nästa advance. Real firmware skulle returnera
+   * PE_BAD_TIMESTAMP men för mock-α2 är clampning tillräckligt; framtida
+   * replay-test kan tillsätta strikt validering.
    */
-  private schedulePtDispatcher(): void {
-    if (this.ptDispatcherScheduled) return;
-    this.ptDispatcherScheduled = true;
-    const tick = (): void => {
-      this.ptDispatcherTick();
-      this.clock.scheduleIn(this.opts.ptDispatcherTickMs, tick);
-    };
-    this.clock.scheduleIn(this.opts.ptDispatcherTickMs, tick);
-  }
-
-  /** Single dispatcher pass — drar ut alla "due" descriptors från båda queues. */
-  private ptDispatcherTick(): void {
-    const simNowMicros = this.clock.getTime() * 1000;
-    let didDispatch = false;
-    for (const queueIdx of [0, 1] as const) {
-      while (true) {
-        const peek = this.ptQueue.peek(queueIdx);
-        if (!peek) break;
-        // Real firmware gates on startTimeMicros; mock dispatchar ASAP eftersom
-        // host-side sleeping ger faktisk timing-grindning. Behåll startTime-
-        // gating så framtida replay-test kan validera bursts utan host-throttle.
-        if (peek.startTimeMicros > simNowMicros) break;
-        const d = this.ptQueue.dequeue(queueIdx);
-        if (!d) break;
-        this.dispatched.push({
-          descriptor: d,
-          dispatchedAtMicros: simNowMicros,
-          queueIdx,
-        });
-        didDispatch = true;
-      }
-    }
-    if (didDispatch) this.notifyPtQueueFreeSpace();
+  private scheduleDescriptorDispatch(descriptor: PtDescriptor, queueIdx: 0 | 1): void {
+    const generation = this.ptQueueGeneration;
+    const startTimeMs = descriptor.startTimeMicros / 1000;
+    const nowMs = this.clock.getTime();
+    const fireAtMs = Math.max(startTimeMs, nowMs);
+    this.clock.scheduleAt(fireAtMs, () => {
+      // Drained mellan enqueue och fire → event invalideras
+      if (generation !== this.ptQueueGeneration) return;
+      const head = this.ptQueue.dequeue(queueIdx);
+      if (!head) return; // belt-and-suspenders, gen-check borde redan ha fångat detta
+      // dispatchedAtMicros == clock.getTime() vid fire == fireAtMs * 1000.
+      // För future-startTime är detta exakt descriptor.startTimeMicros.
+      // För past-due (clampad) är detta nowMs när clock advance:as fram.
+      this.dispatched.push({
+        descriptor: head,
+        dispatchedAtMicros: this.clock.getTime() * 1000,
+        queueIdx,
+      });
+      this.notifyPtQueueFreeSpace();
+    });
   }
 
   /**
@@ -361,11 +370,18 @@ export class MockFirmware {
   }
 
   /**
-   * Drain queue + notify. Anropas från STOP-flödet och kan triggas externt
-   * via drainPtQueue() public för testbarhet.
+   * Drain queue + invalidate pending dispatch-events + notify free-space.
+   * Anropas från STOP-flödet (PlayPauseStop "stop") och kan triggas externt
+   * via public drainPtQueue() för testbarhet.
+   *
+   * Generation-bumpen invaliderar alla schemalagda dispatch-events som
+   * captures'ade tidigare generation — de no-op:ar när de fire:as. Detta
+   * matchar firmware-beteende där PtdQueue_clear följt av sequencerstop
+   * drar bort pending bursts.
    */
   drainPtQueue(): number {
     const dropped = this.ptQueue.drain();
+    this.ptQueueGeneration++;
     this.notifyPtQueueFreeSpace();
     return dropped;
   }

@@ -82,7 +82,7 @@ function buildAttrPacket(
 
 test('descriptor flow: client.writePtDescriptor → firmware enqueues + dispatches', async () => {
   const { client: clientTransport, firmware: fwTransport } = createInMemoryPair();
-  const fw = new MockFirmware({ realtime: false, ptDispatcherTickMs: 5 });
+  const fw = new MockFirmware({ realtime: false });
   fw.attach(fwTransport);
   await fwTransport.open();
 
@@ -109,7 +109,7 @@ test('descriptor flow: client.writePtDescriptor → firmware enqueues + dispatch
 
 test('descriptor flow: phase bit selects sub-queue', async () => {
   const { client: clientTransport, firmware: fwTransport } = createInMemoryPair();
-  const fw = new MockFirmware({ realtime: false, ptDispatcherTickMs: 5 });
+  const fw = new MockFirmware({ realtime: false });
   fw.attach(fwTransport);
   await fwTransport.open();
 
@@ -138,7 +138,7 @@ test('descriptor flow: short-circuit descriptor rejected at firmware edge', asyn
   // Här bygger vi raw bytes som bypassar host-validering för att stress-testa
   // firmware-edgen. Använder en validdescriptor som vi muterar post-encode.
   const { client: clientTransport, firmware: fwTransport } = createInMemoryPair();
-  const fw = new MockFirmware({ realtime: false, ptDispatcherTickMs: 5 });
+  const fw = new MockFirmware({ realtime: false });
   fw.attach(fwTransport);
   await fwTransport.open();
 
@@ -175,7 +175,7 @@ test('descriptor flow: queue overflow drops descriptor with notify', async () =>
   // Skapa 21 descriptors med startTimeMicros långt i framtiden så de
   // INTE dispatchas innan vi mätar overflow-läget.
   const { client: clientTransport, firmware: fwTransport } = createInMemoryPair();
-  const fw = new MockFirmware({ realtime: false, ptDispatcherTickMs: 5 });
+  const fw = new MockFirmware({ realtime: false });
   fw.attach(fwTransport);
   await fwTransport.open();
 
@@ -208,7 +208,7 @@ test('descriptor flow: queue overflow drops descriptor with notify', async () =>
 
 test('descriptor flow: drainPtQueue clears pending and notifies', async () => {
   const { client: clientTransport, firmware: fwTransport } = createInMemoryPair();
-  const fw = new MockFirmware({ realtime: false, ptDispatcherTickMs: 5 });
+  const fw = new MockFirmware({ realtime: false });
   fw.attach(fwTransport);
   await fwTransport.open();
 
@@ -234,9 +234,85 @@ test('descriptor flow: drainPtQueue clears pending and notifies', async () => {
   fw.detach();
 });
 
+test('descriptor flow: dispatch happens precis vid startTimeMicros (event-driven)', async () => {
+  // Strikt timing-test för replay-validering: dispatch fires exakt vid
+  // descriptor.startTimeMicros, inte tick-aligned. Detta var motivationen
+  // bakom bytet från tick-polling till SimClock.scheduleAt-events.
+  const { client: clientTransport, firmware: fwTransport } = createInMemoryPair();
+  const fw = new MockFirmware({ realtime: false });
+  fw.attach(fwTransport);
+  await fwTransport.open();
+
+  const client = new NeoDKClient(clientTransport);
+  await client.connect();
+  await flush();
+
+  // Tre descriptors med ojämna startTimes som INTE alignar mot någon tick-grid
+  const startTimes = [1_234_000, 5_678_000, 9_999_500]; // µs
+  for (let i = 0; i < startTimes.length; i++) {
+    await client.writePtDescriptor(
+      makeDescriptor({ sequenceNumber: i, startTimeMicros: startTimes[i]! }),
+    );
+  }
+  await flush();
+
+  // Inget dispatchat än — alla startTimes i framtiden
+  expect(fw.getDispatchedDescriptors().length).toBe(0);
+
+  // Avancera klockan till strax efter sista startTime
+  fw.getClock().advance(10_000); // 10s = 10_000ms = 10_000_000µs
+  await flush();
+
+  const dispatched = fw.getDispatchedDescriptors();
+  expect(dispatched.length).toBe(3);
+  // dispatchedAtMicros ska vara EXAKT lika med startTimeMicros — ingen tick-jitter
+  for (let i = 0; i < startTimes.length; i++) {
+    expect(dispatched[i]!.dispatchedAtMicros).toBe(startTimes[i]!);
+    expect(dispatched[i]!.descriptor.sequenceNumber).toBe(i);
+  }
+
+  await client.disconnect();
+  fw.detach();
+});
+
+test('descriptor flow: drain invaliderar pending dispatch-events (generation bump)', async () => {
+  // Generation-pattern: descriptors enqueued men dispatch-event ej fired än.
+  // drainPtQueue() bumpar generation → events no-op:ar när de fire:as.
+  const { client: clientTransport, firmware: fwTransport } = createInMemoryPair();
+  const fw = new MockFirmware({ realtime: false });
+  fw.attach(fwTransport);
+  await fwTransport.open();
+
+  const client = new NeoDKClient(clientTransport);
+  await client.connect();
+  await flush();
+
+  // Enqueue 3 descriptors med startTime långt in i framtiden
+  for (let i = 0; i < 3; i++) {
+    await client.writePtDescriptor(
+      makeDescriptor({ sequenceNumber: i, startTimeMicros: 5_000_000 }),
+    );
+  }
+  await flush();
+
+  // Drain INNAN events fire:ar
+  fw.drainPtQueue();
+
+  // Nu advance klockan förbi alla startTimes — events fire:ar men gen-mismatch
+  fw.getClock().advance(10_000);
+  await flush();
+
+  // Inget ska ha dispatchats (gen-check filtrerade bort dem)
+  expect(fw.getDispatchedDescriptors().length).toBe(0);
+  expect(fw.getPtQueueFreeSpace()).toEqual({ q0: SLOTS_PER_QUEUE, q1: SLOTS_PER_QUEUE });
+
+  await client.disconnect();
+  fw.detach();
+});
+
 test('descriptor flow: PlayPauseStop "stop" drains queue automatically', async () => {
   const { client: clientTransport, firmware: fwTransport } = createInMemoryPair();
-  const fw = new MockFirmware({ realtime: false, ptDispatcherTickMs: 5 });
+  const fw = new MockFirmware({ realtime: false });
   fw.attach(fwTransport);
   await fwTransport.open();
 
