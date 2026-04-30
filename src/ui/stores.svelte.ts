@@ -14,6 +14,9 @@ import { type PatternDef, elconId, uniqueElcons } from '../patterns/types';
 import { WaveformGenerator, type WaveformSample } from '../mock-firmware/waveform';
 import { exportDispatchedAsCsv } from '../mock-firmware/csv-export';
 import { buildCsvFilename } from './csv-filename';
+import { SynthEngine } from '../synth/synth-engine';
+import { RealtimeClock } from '../synth/clock';
+import { synth } from './synth/synth-store.svelte';
 
 const log = createLogger('ui-store');
 
@@ -88,6 +91,8 @@ class AppState {
    * I loop-mode bypassas 5-rep-cap:en (kör pattern.nrOfReps fullt per iter).
    */
   loopPattern = $state<boolean>(false);
+  /** β.0 mixer engine running. Toggleras av startMixer/stopMixer. */
+  isMixerRunning = $state<boolean>(false);
 }
 
 /** Cap så att en tre-timmars patternrun inte sväller minnet — räcker för dev. */
@@ -523,4 +528,79 @@ export function exportDispatchedCsv(): void {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// β.0 — Mixer / Synth engine bridge
+// ──────────────────────────────────────────────────────────────────────────
+
+let synthEngine: SynthEngine | null = null;
+
+/**
+ * Lazy-init synth-engine på first start. RealtimeClock i prod, sink går till
+ * client.writePtDescriptor + waveform-gen-shadow + dispatched-buffer (samma
+ * pattern som α2 runPattern men event-driven istället för for-await-loop).
+ */
+function ensureSynthEngine(): SynthEngine {
+  if (synthEngine) return synthEngine;
+  if (!waveformGen) waveformGen = new WaveformGenerator();
+  synthEngine = new SynthEngine({
+    clock: new RealtimeClock(),
+    getState: () => synth.current,
+    sink: (desc) => {
+      if (!client) return;
+      void client.writePtDescriptor(desc).catch((e) => log.warn('writePtDescriptor failed:', e));
+      // Shadow-render för Oscilloscope (host-side, samma som α2 runPattern)
+      const wallNow = performance.now() * 1000;
+      waveformGen?.enqueueDescriptor(desc, wallNow);
+      // Dispatched-buffer för CSV-export
+      const queueIdx = (desc.phase & 0x01) as 0 | 1;
+      const next = app.dispatchedDescriptors.slice();
+      next.push({ descriptor: desc, dispatchedAtMicros: wallNow, queueIdx });
+      if (next.length > DISPATCHED_BUFFER_CAP) {
+        next.splice(0, next.length - DISPATCHED_BUFFER_CAP);
+      }
+      app.dispatchedDescriptors = next;
+    },
+    getRampPercent: () => ramp?.snapshot(performance.now()).effective ?? 0,
+    getCeilingPercent: () => ceiling?.get() ?? app.ceiling,
+  });
+  return synthEngine;
+}
+
+export function startMixer(): void {
+  if (!client || app.connection === 'disconnected') {
+    pushDebugLog({ ts: Date.now(), direction: 'system', text: 'Cannot start mixer: not connected' });
+    return;
+  }
+  if (app.isMixerRunning) return;
+  // Reset waveform-shadow + dispatched-buffer för clean run
+  if (!waveformGen) waveformGen = new WaveformGenerator();
+  waveformGen.reset();
+  app.waveformBuffers = new Map();
+  app.dispatchedDescriptors = [];
+  // Auto-show alla unika elcons från mixer-channels i Oscilloscope
+  const visibleSet = new Set<string>();
+  for (const ch of synth.current.channels) {
+    visibleSet.add(elconId(ch.elcon));
+  }
+  app.visibleElcons = visibleSet;
+  startWaveformLoop();
+
+  const engine = ensureSynthEngine();
+  engine.start();
+  app.isMixerRunning = true;
+  pushDebugLog({
+    ts: Date.now(),
+    direction: 'system',
+    text: `Mixer started (${synth.current.channels.length} channels, ${synth.current.lfos.length} LFOs)`,
+  });
+}
+
+export function stopMixer(): void {
+  if (synthEngine) {
+    synthEngine.stop();
+  }
+  app.isMixerRunning = false;
+  pushDebugLog({ ts: Date.now(), direction: 'system', text: 'Mixer stopped' });
 }

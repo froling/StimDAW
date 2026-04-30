@@ -167,6 +167,20 @@
     }
   }
 
+  /**
+   * Keyboard equivalent för cable-click (per a11y audit-rec):
+   * Enter = confirm-delete, Shift+Enter eller Delete = instant delete.
+   */
+  function onCableKeydown(cable: Cable, e: KeyboardEvent): void {
+    if (e.key === 'Delete' || (e.key === 'Enter' && e.shiftKey)) {
+      e.preventDefault();
+      removeCable(cable.id);
+    } else if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      if (confirm('Remove cable?')) removeCable(cable.id);
+    }
+  }
+
   // ── Drop-target highlighting under drag ─────────────────────────
 
   $effect(() => {
@@ -225,7 +239,8 @@
         )}
         stroke={colorLabel.color}
         onclick={(e) => onCableClick(cable, e)}
-        aria-label={`Cable from ${colorLabel.label} to ${cable.destChannelId} ${cable.destKnobName}`}
+        onkeydown={(e) => onCableKeydown(cable, e)}
+        aria-label={`Cable from ${colorLabel.label} to ${cable.destChannelId} ${cable.destKnobName}. Press Enter to delete, Shift+Enter or Delete för instant.`}
         role="button"
         tabindex="0"
       />

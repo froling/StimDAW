@@ -55,10 +55,12 @@
   let dragShiftHeld = $state(false);
 
   // Visuell rotation: -135° (min) till +135° (max), så pekaren fyller 270° båge
-  let knobAngle = $derived(() => {
-    const t = valueToT(value, bounds, { log });
-    return -135 + t * 270; // degrees
-  });
+  let knobAngle = $derived(-135 + valueToT(value, bounds, { log }) * 270);
+  let fillFraction = $derived((knobAngle - -135) / 270);
+  let pointerX = $derived(Math.cos(((knobAngle - 90) * Math.PI) / 180) * 28);
+  let pointerY = $derived(Math.sin(((knobAngle - 90) * Math.PI) / 180) * 28);
+  let arcEndX = $derived(Math.cos(((knobAngle - 90) * Math.PI) / 180) * 45.96);
+  let arcEndY = $derived(Math.sin(((knobAngle - 90) * Math.PI) / 180) * 45.96);
 
   let formatted = $derived(formatKnobValue(value, unit));
 
@@ -123,15 +125,9 @@
         stroke-width="3"
       />
       <!-- Filled arc upp till knob-angle, från min (-135°) till current -->
-      {@const fillEnd = knobAngle()}
-      {@const fillFraction = (fillEnd - -135) / 270}
       <path
         class="knob-fill"
-        d="M -32.4 32.4 A 45.96 45.96 0 {fillFraction > 0.5 ? '1' : '0'} 1 {(
-          Math.cos((fillEnd - 90) * Math.PI / 180) * 45.96
-        ).toFixed(2)} {(
-          Math.sin((fillEnd - 90) * Math.PI / 180) * 45.96
-        ).toFixed(2)}"
+        d="M -32.4 32.4 A 45.96 45.96 0 {fillFraction > 0.5 ? '1' : '0'} 1 {arcEndX.toFixed(2)} {arcEndY.toFixed(2)}"
         fill="none"
         stroke-width="3"
       />
@@ -140,8 +136,8 @@
         class="knob-pointer"
         x1="0"
         y1="0"
-        x2={(Math.cos((fillEnd - 90) * Math.PI / 180) * 28).toFixed(2)}
-        y2={(Math.sin((fillEnd - 90) * Math.PI / 180) * 28).toFixed(2)}
+        x2={pointerX.toFixed(2)}
+        y2={pointerY.toFixed(2)}
         stroke-width="3"
         stroke-linecap="round"
       />
