@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { untrack } from 'svelte';
   import {
     synth,
     addChannel,
@@ -9,7 +10,7 @@
   import LFOModule from './synth/LFOModule.svelte';
   import CableLayer from './synth/CableLayer.svelte';
   import { lfoColor } from './synth/cable-helpers';
-  import { ElectrodeMask, type Elcon } from '../patterns/types';
+  import { ElectrodeMask, elconId, type Elcon } from '../patterns/types';
   import type { MixerChannel as ChannelT } from '../synth/types';
   import { app, startMixer, stopMixer } from './stores.svelte';
 
@@ -41,6 +42,28 @@
     return () => {
       setActiveSource('idle');
     };
+  });
+
+  /**
+   * Auto-add nya channel-elcons till app.visibleElcons så Oscilloscope
+   * visar rows omedelbart när channels läggs till. User toggle-off
+   * persisterar (vi addar bara, tar aldrig bort). untrack() runt
+   * visibleElcons-läs så $effect inte triggrar om sig själv.
+   */
+  $effect(() => {
+    const channels = synth.current.channels; // tracked
+    untrack(() => {
+      const next = new Set(app.visibleElcons);
+      let changed = false;
+      for (const ch of channels) {
+        const id = elconId(ch.elcon);
+        if (!next.has(id)) {
+          next.add(id);
+          changed = true;
+        }
+      }
+      if (changed) app.visibleElcons = next;
+    });
   });
 
   /** Beräkna modColors för en channel — vilka av dess knobs är modulerade,

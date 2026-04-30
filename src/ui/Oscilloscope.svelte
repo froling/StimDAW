@@ -1,5 +1,6 @@
 <script lang="ts">
   import { app, toggleElconVisibility, toggleTrace } from './stores.svelte';
+  import { synth } from './synth/synth-store.svelte';
   import { uniqueElcons, elconId, elconToLabel, type Elcon } from '../patterns/types';
   import type { WaveformSample } from '../mock-firmware/waveform';
   import {
@@ -156,10 +157,29 @@
     timingBars: DispatchedDescriptor[];
   };
 
+  /**
+   * Source-agnostic elcon-rows: reflekterar aktuell aktiv source.
+   *  - Mixer mode → uniqueElcons från synth.current.channels
+   *  - Pattern mode → uniqueElcons från app.currentPattern.elcons
+   *  - Idle → tom (empty-state med generisk hint)
+   *
+   * Fix från β.0 first-run: tidigare läste vi bara från app.currentPattern
+   * vilket gjorde att Mixer-mode visade "No pattern selected" trots aktiva
+   * channels.
+   */
+  let activeElcons = $derived.by((): Elcon[] => {
+    if (synth.activeSource === 'mixer' && synth.current.channels.length > 0) {
+      return uniqueElcons(synth.current.channels.map((ch) => ch.elcon));
+    }
+    if (app.currentPattern) {
+      return uniqueElcons(app.currentPattern.elcons);
+    }
+    return [];
+  });
+
   let rows = $derived.by((): RowInfo[] => {
-    if (!app.currentPattern) return [];
     const now = app.waveformNowMicros;
-    return uniqueElcons(app.currentPattern.elcons).map((elcon) => {
+    return activeElcons.map((elcon) => {
       const id = elconId(elcon);
       return {
         id,
@@ -187,7 +207,7 @@
     <h2 class="osc-title">Oscilloscope</h2>
     <span class="osc-channel-summary">
       {#if totalCount === 0}
-        no pattern
+        no source
       {:else}
         {visibleCount}/{totalCount} visible · {traceCount} {traceCount === 1 ? 'trace' : 'traces'}
       {/if}
@@ -245,8 +265,11 @@
 
   {#if rows.length === 0}
     <div class="osc-empty">
-      <p>No pattern selected.</p>
-      <p class="hint">Pick a pattern in the runner panel above to begin.</p>
+      <p>No active source.</p>
+      <p class="hint">
+        Pick a pattern (Patterns tab) or add a channel (Mixer tab) above to
+        begin.
+      </p>
     </div>
   {:else}
     <div class="osc-rows">
