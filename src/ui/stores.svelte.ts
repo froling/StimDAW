@@ -72,6 +72,15 @@ class AppState {
    * Descriptors() firmware-sidans truth (post-decode, post-enqueue).
    */
   dispatchedDescriptors = $state<DispatchedDescriptor[]>([]);
+  /**
+   * Loop-mode: när true så repeterar runPattern hela pattern-körningen tills
+   * stopPattern triggas. Läses i runPattern's do-while-condition och vid
+   * varje iterations start, så användaren kan toggla under körning:
+   *   - check while running → forsätt loopa efter aktuell iteration
+   *   - uncheck while looping → avsluta efter aktuell iteration
+   * I loop-mode bypassas 5-rep-cap:en (kör pattern.nrOfReps fullt per iter).
+   */
+  loopPattern = $state<boolean>(false);
 }
 
 /** Cap så att en tre-timmars patternrun inte sväller minnet — räcker för dev. */
@@ -371,35 +380,52 @@ export async function runPattern(patternName: string): Promise<void> {
   patternRunCancel = cancel;
 
   try {
-    // Cap reps i α2 så vi inte spinner i 15 minuter på Toggle 300×
-    const maxReps = Math.min(5, pattern.nrOfReps);
+    // Cap reps i one-shot-läge (α2 dev-tempo). Loop-läge bypassar cap:en
+    // eftersom användaren styr stop manuellt.
+    const oneShotMaxReps = Math.min(5, pattern.nrOfReps);
     const startMicros = performance.now() * 1000;
     let descTime = startMicros;
+    // Cumulativa state-variabler för descriptor-stream-continuity över
+    // loop-iterations: descriptor.startTimeMicros och sequenceNumber måste
+    // vara monotont stigande så mock-firmware:s SimClock-scheduling och
+    // firmware-sidans seq-tracking funkar korrekt över loop-gränser.
+    let cumulativeStartTimeMicros = 0;
+    let cumulativeSeqNr = 0;
 
-    for (const desc of generatePatternDescriptors(pattern, { maxReps })) {
-      if (cancel.cancelled) break;
-      try {
-        await client.writePtDescriptor(desc);
-      } catch (e) {
-        log.warn('writePtDescriptor failed:', e);
-        break;
+    do {
+      const maxReps = app.loopPattern ? pattern.nrOfReps : oneShotMaxReps;
+      for (const desc of generatePatternDescriptors(pattern, {
+        maxReps,
+        initialStartTimeMicros: cumulativeStartTimeMicros,
+        initialSequenceNumber: cumulativeSeqNr,
+      })) {
+        if (cancel.cancelled) break;
+        try {
+          await client.writePtDescriptor(desc);
+        } catch (e) {
+          log.warn('writePtDescriptor failed:', e);
+          cancel.cancelled = true;
+          break;
+        }
+        // Shadow-render: feed descriptor til local waveform-gen vid sin sim-time
+        waveformGen.enqueueDescriptor(desc, descTime);
+        // Track för CSV-export — ringbuffer-cap så långa körningar inte blåser
+        // upp minnet. queueIdx härleds från phase-bit (samma som firmware).
+        const queueIdx = (desc.phase & 0x01) as 0 | 1;
+        const next = app.dispatchedDescriptors.slice();
+        next.push({ descriptor: desc, dispatchedAtMicros: descTime, queueIdx });
+        if (next.length > DISPATCHED_BUFFER_CAP) {
+          next.splice(0, next.length - DISPATCHED_BUFFER_CAP);
+        }
+        app.dispatchedDescriptors = next;
+        const durationMicros = desc.nrOfPulses * desc.paceQuarterMs * 250;
+        descTime += durationMicros;
+        cumulativeStartTimeMicros = desc.startTimeMicros + durationMicros;
+        cumulativeSeqNr = (desc.sequenceNumber + 1) & 0xff;
+        // Vänta så pattern playas i realtid (annars firar alla descriptors instant)
+        await sleep(durationMicros / 1000);
       }
-      // Shadow-render: feed descriptor til local waveform-gen vid sin sim-time
-      waveformGen.enqueueDescriptor(desc, descTime);
-      // Track för CSV-export — ringbuffer-cap så långa körningar inte blåser
-      // upp minnet. queueIdx härleds från phase-bit (samma som firmware).
-      const queueIdx = (desc.phase & 0x01) as 0 | 1;
-      const next = app.dispatchedDescriptors.slice();
-      next.push({ descriptor: desc, dispatchedAtMicros: descTime, queueIdx });
-      if (next.length > DISPATCHED_BUFFER_CAP) {
-        next.splice(0, next.length - DISPATCHED_BUFFER_CAP);
-      }
-      app.dispatchedDescriptors = next;
-      const durationMicros = desc.nrOfPulses * desc.paceQuarterMs * 250;
-      descTime += durationMicros;
-      // Vänta så pattern playas i realtid (annars firar alla descriptors instant)
-      await sleep(durationMicros / 1000);
-    }
+    } while (app.loopPattern && !cancel.cancelled);
   } finally {
     if (patternRunCancel === cancel) patternRunCancel = null;
     app.isRunningPattern = false;

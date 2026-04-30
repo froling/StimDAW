@@ -7,7 +7,10 @@
   const VIEW_W = 100;
   const VIEW_H = 40;
   const Y_PAD = 2;
+  const CENTER_Y = VIEW_H / 2; // 0-baseline i mitten (post user req 2026-05)
+  const HALF_H = (VIEW_H - 2 * Y_PAD) / 2;
   const WINDOW_MICROS = 6_000_000; // 6s rolling window per design lock
+  const VCAP_MAX = 80_000; // mV — full-scale för vcap-magnitud
 
   /**
    * Tid → x-koordinat. Senaste sample (timestamp == nowMicros) hamnar vid x=100,
@@ -15,6 +18,14 @@
    */
   function timeToX(timestampMicros: number, nowMicros: number): number {
     return (VIEW_W * (timestampMicros - (nowMicros - WINDOW_MICROS))) / WINDOW_MICROS;
+  }
+
+  /**
+   * Signed value (-1..+1) → y-koordinat. 0 i mitten (CENTER_Y),
+   * +1 toppen, -1 botten. Värden utanför clampas inte här — caller normaliserar.
+   */
+  function signedToY(signed: number): number {
+    return CENTER_Y - signed * HALF_H;
   }
 
   /** Filtrera samples till de som är inom det rolling window. */
@@ -28,19 +39,21 @@
   }
 
   /**
-   * Step-line path för amp. Tids-baserad x-positionering så grafen rullar:
-   * senaste sample vid x=100, äldre glider ut vänster.
+   * Step-line path för amp. Tids-baserad x-positionering så grafen rullar.
+   * Signed value: amp/255 multiplicerat med phase-sign (phase=0 → +, phase=1 → -)
+   * så biphasic-pulser går uppåt resp nedåt från 0-baseline.
    */
   function buildAmpPath(samples: WaveformSample[], nowMicros: number): string {
     const visible = withinWindow(samples, nowMicros);
     if (visible.length === 0) return '';
-    const valueToY = (v: number): number => VIEW_H - Y_PAD - (v / 255) * (VIEW_H - 2 * Y_PAD);
+    const ampSigned = (s: WaveformSample): number =>
+      (s.amp / 255) * (s.phase === 0 ? 1 : -1);
     let prevX = timeToX(visible[0]!.timestampMicros, nowMicros);
-    let prevY = valueToY(visible[0]!.amp);
+    let prevY = signedToY(ampSigned(visible[0]!));
     let d = `M${prevX.toFixed(2)},${prevY.toFixed(2)}`;
     for (let i = 1; i < visible.length; i++) {
       const x = timeToX(visible[i]!.timestampMicros, nowMicros);
-      const y = valueToY(visible[i]!.amp);
+      const y = signedToY(ampSigned(visible[i]!));
       if (Math.abs(y - prevY) > 0.05) {
         d += ` L${x.toFixed(2)},${prevY.toFixed(2)} L${x.toFixed(2)},${y.toFixed(2)}`;
       } else {
@@ -51,28 +64,31 @@
     return d;
   }
 
-  /** Smooth path för Vcap, samma rolling x-positionering. */
+  /**
+   * Smooth path för Vcap, samma rolling x-positionering.
+   * Vcap är redan signed i sample (RC-followern multiplicerar med phase-sign),
+   * vi normaliserar bara mot VCAP_MAX för -1..+1-domänen.
+   */
   function buildVcapPath(samples: WaveformSample[], nowMicros: number): string {
     const visible = withinWindow(samples, nowMicros);
     if (visible.length === 0) return '';
-    const VCAP_MAX = 80_000;
-    const valueToY = (v: number): number => VIEW_H - Y_PAD - (v / VCAP_MAX) * (VIEW_H - 2 * Y_PAD);
     return visible
       .map(
         (s, i) =>
-          `${i === 0 ? 'M' : 'L'}${timeToX(s.timestampMicros, nowMicros).toFixed(2)},${valueToY(s.vcap).toFixed(2)}`,
+          `${i === 0 ? 'M' : 'L'}${timeToX(s.timestampMicros, nowMicros).toFixed(2)},${signedToY(s.vcap / VCAP_MAX).toFixed(2)}`,
       )
       .join(' ');
   }
 
-  /** Senaste amp-värde i % för readout. */
+  /** Senaste amp-värde i % för readout (signed: + uppåt, - nedåt). */
   function lastAmpPercent(samples: WaveformSample[]): number {
     if (samples.length === 0) return 0;
     const last = samples[samples.length - 1]!;
-    return Math.round((last.amp / 255) * 100);
+    const sign = last.phase === 0 ? 1 : -1;
+    return Math.round((last.amp / 255) * 100) * sign;
   }
 
-  /** Senaste vcap i V för readout. */
+  /** Senaste vcap i V för readout (signed). */
   function lastVcapVolts(samples: WaveformSample[]): number {
     if (samples.length === 0) return 0;
     const last = samples[samples.length - 1]!;
@@ -171,9 +187,11 @@
           {#if row.visible}
             <div class="osc-chart">
               <svg viewBox="0 0 100 40" preserveAspectRatio="none">
-                <line class="grid-line" x1="0" y1="20" x2="100" y2="20" />
-                <line class="grid-line" x1="0" y1="10" x2="100" y2="10" />
-                <line class="grid-line" x1="0" y1="30" x2="100" y2="30" />
+                <!-- ±50% guide-linjer (extra svaga) -->
+                <line class="grid-line" x1="0" y1="11" x2="100" y2="11" />
+                <line class="grid-line" x1="0" y1="29" x2="100" y2="29" />
+                <!-- 0-baseline i mitten (svag grå) — visuell referens för biphasic polaritet -->
+                <line class="baseline-zero" x1="0" y1="20" x2="100" y2="20" />
                 {#if vcapActive && row.samples.length > 1}
                   <path class="trace-vcap" d={buildVcapPath(row.samples, app.waveformNowMicros)} />
                 {/if}
@@ -356,6 +374,11 @@
   .grid-line {
     stroke: #eef0f2;
     stroke-width: 0.3;
+    vector-effect: non-scaling-stroke;
+  }
+  .baseline-zero {
+    stroke: #c8c8c8;
+    stroke-width: 0.6;
     vector-effect: non-scaling-stroke;
   }
   .trace-amp {

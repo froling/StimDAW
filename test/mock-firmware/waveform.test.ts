@@ -141,3 +141,81 @@ test('rampPercent + ceilingPercent integration', () => {
   s = g.sample(75_000, { rampPercent: 50, ceilingPercent: 50 });
   expect(s[0]?.amp).toBe(63);
 });
+
+// ── Biphasic signed traces (post user req 2026-05) ─────────────────────
+
+test('phase=0 descriptor → positivt signed vcap (uppåt)', () => {
+  const g = new WaveformGenerator();
+  g.enqueueDescriptor({ ...makeDesc(255, 1, 2, 100, 200), phase: 0 }, 0);
+  // RC charging → vcap blir positivt
+  let last = 0;
+  for (let i = 0; i < 50; i++) {
+    last = g.sample(i * 30_000, { rampPercent: 100, ceilingPercent: 100 })[0]!.vcap;
+  }
+  expect(last).toBeGreaterThan(0);
+  expect(last).toBeGreaterThan(60_000);
+});
+
+test('phase=1 descriptor → negativt signed vcap (nedåt)', () => {
+  const g = new WaveformGenerator();
+  g.enqueueDescriptor({ ...makeDesc(255, 1, 2, 100, 200), phase: 1 }, 0);
+  // RC charging åt motsatt håll → vcap blir negativt
+  let last = 0;
+  for (let i = 0; i < 50; i++) {
+    last = g.sample(i * 30_000, { rampPercent: 100, ceilingPercent: 100 })[0]!.vcap;
+  }
+  expect(last).toBeLessThan(0);
+  expect(last).toBeLessThan(-60_000);
+});
+
+test('phase återspeglas i sample.phase', () => {
+  const g = new WaveformGenerator();
+  g.enqueueDescriptor({ ...makeDesc(128), phase: 0 }, 0);
+  let s = g.sample(15_000, { rampPercent: 100, ceilingPercent: 100 });
+  expect(s[0]?.phase).toBe(0);
+
+  // Reset + phase=1 descriptor
+  g.reset();
+  g.enqueueDescriptor({ ...makeDesc(128), phase: 1 }, 0);
+  s = g.sample(15_000, { rampPercent: 100, ceilingPercent: 100 });
+  expect(s[0]?.phase).toBe(1);
+});
+
+test('biphasic-flip: vcap kan svänga från + till - över descriptors', () => {
+  const g = new WaveformGenerator();
+  // Phase=0 descriptor charges vcap positively
+  g.enqueueDescriptor({ ...makeDesc(255, 1, 2, 100, 200), phase: 0 }, 0);
+  for (let i = 0; i < 50; i++) {
+    g.sample(i * 30_000, { rampPercent: 100, ceilingPercent: 100 });
+  }
+  const positivePeak = g.sample(50 * 30_000, { rampPercent: 100, ceilingPercent: 100 })[0]!.vcap;
+  expect(positivePeak).toBeGreaterThan(0);
+
+  // Phase=1 descriptor på samma elcon flippar polariteten
+  g.enqueueDescriptor({ ...makeDesc(255, 1, 2, 100, 200), phase: 1 }, 51 * 30_000);
+  let last = positivePeak;
+  for (let i = 0; i < 100; i++) {
+    last = g.sample(51 * 30_000 + i * 30_000, { rampPercent: 100, ceilingPercent: 100 })[0]!.vcap;
+  }
+  // Vcap har nu hunnit svänga ner till negativt
+  expect(last).toBeLessThan(0);
+});
+
+test('decay går mot 0 oavsett senaste polaritet', () => {
+  const g = new WaveformGenerator();
+  // Phase=1 charges vcap negativt
+  g.enqueueDescriptor({ ...makeDesc(255, 1, 2, 4, 100), phase: 1 }, 0); // 100ms aktiv
+  for (let i = 0; i < 5; i++) {
+    g.sample(i * 30_000, { rampPercent: 100, ceilingPercent: 100 });
+  }
+  const negativePeak = g.sample(150_000, { rampPercent: 100, ceilingPercent: 100 })[0]?.vcap ?? 0;
+  expect(negativePeak).toBeLessThan(0);
+
+  // Past descriptor-end → decay mot 0 (magnitud minskar)
+  let lastMag = Math.abs(negativePeak);
+  for (let i = 0; i < 30; i++) {
+    const s = g.sample(180_000 + i * 30_000, { rampPercent: 100, ceilingPercent: 100 });
+    if (s.length > 0) lastMag = Math.abs(s[0]!.vcap);
+  }
+  expect(lastMag).toBeLessThan(Math.abs(negativePeak));
+});

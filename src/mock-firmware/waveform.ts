@@ -7,6 +7,14 @@
  *   - Vcap trace = smooth line (RC follower, τ ≈ 200ms)
  *   - Future: Iprim, etc.
  *
+ * Biphasic visualization (post user req 2026-05): Oscilloscope renderar
+ * 0-baseline i mitten, så signed traces. Phase-bit avgör polaritet:
+ *   phase=0 → positiv (uppåt)
+ *   phase=1 → negativ (nedåt)
+ * amp förblir magnitud (0..255) i sample; Oscilloscope multiplicerar med
+ * phase-sign vid render. Vcap är dock signed redan i sample (RC-followern
+ * körs på signed target) så biphasic-charge syns över decay-pauses.
+ *
  * Per outside-voice #3 SINGLE CHOKEPOINT amplitude clamp:
  *   effective = min(rampPercent × descriptorAmp × ceilingPercent, 255)
  * Hardcoded MAX (255) kan ej överskridas oavsett bug i upstream-multiplier.
@@ -22,9 +30,15 @@ export interface WaveformSample {
   readonly elconId: string;
   /** Elcon-pair (för UI label-formatting). */
   readonly elcon: Elcon;
-  /** Effective amplitude post-clamp 0..255. */
+  /** Effective amplitude magnitud post-clamp 0..255 (osignerad). */
   readonly amp: number;
-  /** Vcap voltage i millivolt 0..80000. */
+  /** Phase-bit från aktiv descriptor: 0 = positiv polaritet, 1 = negativ. */
+  readonly phase: 0 | 1;
+  /**
+   * Vcap voltage i signed millivolt, range -80000..+80000.
+   * RC-followern är signed så target=phase-multiplied-amp; under decay
+   * faller vcap från sin senaste signed nivå mot 0.
+   */
   readonly vcap: number;
 }
 
@@ -80,7 +94,8 @@ export class WaveformGenerator {
    * Single chokepoint amp clamp:
    *   effective = floor(descriptor.amplitude × rampPercent/100 × ceilingPercent/100)
    *   capped at 255.
-   * Active=null elcons (descriptor done) får amp=0, vcap fortsätter decay.
+   * Active=null elcons (descriptor done) får amp=0, vcap fortsätter decay
+   * mot 0 från sin senaste (signed) nivå.
    */
   sample(simNowMicros: number, inputs: SamplerInputs): WaveformSample[] {
     // Cleanup: drop active descriptors som har passerat sin endTime
@@ -98,6 +113,7 @@ export class WaveformGenerator {
       const active = this.active.get(id);
       let elcon: Elcon;
       let amp: number;
+      let phase: 0 | 1;
 
       if (active) {
         elcon = active.descriptor.electrodeSet as Elcon;
@@ -106,20 +122,24 @@ export class WaveformGenerator {
           inputs.rampPercent,
           inputs.ceilingPercent,
         );
+        phase = (active.descriptor.phase & 0x01) as 0 | 1;
       } else {
         // Decaying — recover elcon from id "pos-neg"
         const [posStr, negStr] = id.split('-');
         elcon = [Number(posStr), Number(negStr)] as Elcon;
         amp = 0;
+        phase = 0; // amp=0 så phase påverkar inte output, default 0
       }
 
-      // RC follower on Vcap
+      // Signed RC follower on Vcap — target multiplicerad med phase-sign
+      // så biphasic-charge syns. Decay (amp=0) går mot 0 oavsett phase.
+      const phaseSign = phase === 0 ? 1 : -1;
       const oldVcap = this.vcap.get(id) ?? 0;
-      const targetVcap = (amp / 255) * V_CAP_MAX_MV;
+      const targetVcap = (amp / 255) * V_CAP_MAX_MV * phaseSign;
       const newVcap = oldVcap + (targetVcap - oldVcap) * alpha;
 
-      if (newVcap < VCAP_DECAY_THRESHOLD_MV && !active) {
-        // Decayed below threshold and no longer active — drop tracking
+      if (Math.abs(newVcap) < VCAP_DECAY_THRESHOLD_MV && !active) {
+        // Decayed under threshold (i magnitud) och ej längre aktiv — drop tracking
         this.vcap.delete(id);
       } else {
         this.vcap.set(id, newVcap);
@@ -130,7 +150,8 @@ export class WaveformGenerator {
         elconId: id,
         elcon,
         amp,
-        vcap: Math.max(0, newVcap),
+        phase,
+        vcap: newVcap,
       });
     }
 

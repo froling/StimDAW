@@ -34,6 +34,13 @@
         {p.name}
       </button>
     {/each}
+    <label
+      class="loop-toggle"
+      title="Repetera valt pattern tills Stop pattern trycks. Loop-läge bypassar 5-rep-cap."
+    >
+      <input type="checkbox" bind:checked={app.loopPattern} />
+      Loop
+    </label>
     <button
       type="button"
       class="export-btn"
@@ -57,8 +64,9 @@
   </div>
 
   <p class="footnote">
-    Temp panel — DAW (β) kommer ersätta. Patterns kappas till 5 reps i α2 för dev-tempo.
-    CSV-export = host-sanning (vad runner skickade), inte firmware-sidans dispatch.
+    Temp panel — DAW (β) kommer ersätta. One-shot kappas till 5 reps i α2;
+    Loop kör pattern.nrOfReps fullt och repeterar tills Stop. CSV-export =
+    host-sanning (vad runner skickade), inte firmware-sidans dispatch.
   </p>
 </section>
 
@@ -177,6 +185,26 @@
     font-family: ui-monospace, monospace;
     font-size: 0.78rem;
     margin-left: 0.2rem;
+  }
+  .loop-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.4rem 0.6rem;
+    border: 1px solid transparent;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 0.85rem;
+    color: #555;
+    user-select: none;
+    font-family: system-ui, sans-serif;
+  }
+  .loop-toggle:hover {
+    color: #0066cc;
+  }
+  .loop-toggle input[type="checkbox"] {
+    margin: 0;
+    cursor: pointer;
   }
 
   .footnote {
