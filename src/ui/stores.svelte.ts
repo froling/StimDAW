@@ -380,9 +380,6 @@ export async function runPattern(patternName: string): Promise<void> {
   patternRunCancel = cancel;
 
   try {
-    // Cap reps i one-shot-läge (α2 dev-tempo). Loop-läge bypassar cap:en
-    // eftersom användaren styr stop manuellt.
-    const oneShotMaxReps = Math.min(5, pattern.nrOfReps);
     const startMicros = performance.now() * 1000;
     let descTime = startMicros;
     // Cumulativa state-variabler för descriptor-stream-continuity över
@@ -393,7 +390,15 @@ export async function runPattern(patternName: string): Promise<void> {
     let cumulativeSeqNr = 0;
 
     do {
-      const maxReps = app.loopPattern ? pattern.nrOfReps : oneShotMaxReps;
+      // Per-iteration rep-cap. Loop-läge använder 1 rep så repetitionen
+      // syns tätt; one-shot använder upp till 5 reps för längre play
+      // utan att man måste hålla i Stop. Bypassad cap (= pattern.nrOfReps)
+      // ger 15+ min/iter på Toggle 300× → man tror loopen är trasig.
+      // Re-evalueras per iter så toggle av checkbox under körning tar
+      // effekt på nästa iteration.
+      const maxReps = app.loopPattern
+        ? Math.min(1, pattern.nrOfReps)
+        : Math.min(5, pattern.nrOfReps);
       for (const desc of generatePatternDescriptors(pattern, {
         maxReps,
         initialStartTimeMicros: cumulativeStartTimeMicros,
