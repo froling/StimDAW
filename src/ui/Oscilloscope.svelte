@@ -262,7 +262,7 @@
           </button>
           <span class="osc-elcon">{row.label}</span>
           {#if row.visible}
-            <div class="osc-charts">
+            <div class="osc-charts" class:has-timing={timingActive}>
               <!-- Top chart: amp/vcap signed (70% rad-höjd) -->
               <div class="osc-chart osc-chart-signed">
                 <svg viewBox="0 0 100 40" preserveAspectRatio="none">
@@ -496,7 +496,14 @@
     display: flex;
     flex-direction: column;
     gap: 2px;
-    height: 100%;
+    /* Explicit höjd — utan denna kollapsar parent till 0 (align-items: center
+       på grid-raden gör att children inte stretchas) och svg-elementen tar då
+       sin viewBox-aspect-ratio över 1fr-bredden → enorma charts */
+    height: 44px;
+  }
+  .osc-charts.has-timing {
+    /* Signed (42) + gap (2) + timing (16) = 60 */
+    height: 60px;
   }
   .osc-chart {
     background: #fafafa;
@@ -505,12 +512,14 @@
     position: relative;
   }
   .osc-chart-signed {
-    /* 70% av rad-höjden — biphasic amp/vcap */
-    flex: 7;
+    /* Biphasic amp/vcap chart */
+    height: 42px;
+    flex-shrink: 0;
   }
   .osc-chart-timing {
-    /* 30% av rad-höjden — pulse_width / pace staplar (0 i botten) */
-    flex: 3;
+    /* pulse_width / pace staplar (0 i botten) */
+    height: 16px;
+    flex-shrink: 0;
   }
   .osc-chart svg {
     display: block;
