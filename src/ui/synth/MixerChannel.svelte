@@ -63,37 +63,59 @@
   </div>
 
   <div class="knobs">
-    <Knob
-      value={channel.knobs.pulseWidth.base}
-      bounds={PULSE_WIDTH_BOUNDS}
-      defaultValue={KNOB_DEFAULTS.pulseWidthMicros}
-      unit="us"
-      label="PW"
-      modSourceId={channel.knobs.pulseWidth.modCableId}
-      modColor={modColors.pulseWidth}
-      onChange={setPulseWidth}
-    />
-    <Knob
-      value={channel.knobs.pace.base}
-      bounds={PACE_BOUNDS}
-      log={true}
-      defaultValue={KNOB_DEFAULTS.paceMicros}
-      unit="ms"
-      label="Pace"
-      modSourceId={channel.knobs.pace.modCableId}
-      modColor={modColors.pace}
-      onChange={setPace}
-    />
-    <Knob
-      value={channel.knobs.amplitude.base}
-      bounds={AMPLITUDE_BOUNDS}
-      defaultValue={KNOB_DEFAULTS.amplitude}
-      unit="percent"
-      label="Amp"
-      modSourceId={channel.knobs.amplitude.modCableId}
-      modColor={modColors.amplitude}
-      onChange={setAmplitude}
-    />
+    <!-- data-knob-port markerar drop-targets för CableLayer drag-cable -->
+    <div
+      class="knob-port"
+      data-knob-port="true"
+      data-channel-id={channel.id}
+      data-knob-name="pulseWidth"
+    >
+      <Knob
+        value={channel.knobs.pulseWidth.base}
+        bounds={PULSE_WIDTH_BOUNDS}
+        defaultValue={KNOB_DEFAULTS.pulseWidthMicros}
+        unit="us"
+        label="PW"
+        modSourceId={channel.knobs.pulseWidth.modCableId}
+        modColor={modColors.pulseWidth}
+        onChange={setPulseWidth}
+      />
+    </div>
+    <div
+      class="knob-port"
+      data-knob-port="true"
+      data-channel-id={channel.id}
+      data-knob-name="pace"
+    >
+      <Knob
+        value={channel.knobs.pace.base}
+        bounds={PACE_BOUNDS}
+        log={true}
+        defaultValue={KNOB_DEFAULTS.paceMicros}
+        unit="ms"
+        label="Pace"
+        modSourceId={channel.knobs.pace.modCableId}
+        modColor={modColors.pace}
+        onChange={setPace}
+      />
+    </div>
+    <div
+      class="knob-port"
+      data-knob-port="true"
+      data-channel-id={channel.id}
+      data-knob-name="amplitude"
+    >
+      <Knob
+        value={channel.knobs.amplitude.base}
+        bounds={AMPLITUDE_BOUNDS}
+        defaultValue={KNOB_DEFAULTS.amplitude}
+        unit="percent"
+        label="Amp"
+        modSourceId={channel.knobs.amplitude.modCableId}
+        modColor={modColors.amplitude}
+        onChange={setAmplitude}
+      />
+    </div>
   </div>
 </div>
 
@@ -168,5 +190,22 @@
     display: flex;
     justify-content: space-around;
     padding: 0.3rem 0;
+  }
+  .knob-port {
+    /* CableLayer hookar drop-target via data-knob-port-attribute */
+    position: relative;
+    border-radius: 6px;
+    padding: 2px;
+    transition: outline 0.1s, background 0.1s;
+  }
+  /* Class .drop-target sätts av CableLayer under drag-active för att highlita */
+  :global(.knob-port.drop-target-available) {
+    outline: 2px dashed var(--drop-color, #888);
+    outline-offset: 2px;
+  }
+  :global(.knob-port.drop-target-occupied) {
+    outline: 2px solid var(--drop-color, #888);
+    outline-offset: 2px;
+    opacity: 0.6;
   }
 </style>
