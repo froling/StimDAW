@@ -1,9 +1,10 @@
 /**
  * Parse + serialize patterns312-CSV-format för replay-validation.
  *
- * Lenient parser (per E6=B) — accepterar både:
+ * Lenient parser (per E6=B) — accepterar tre header-format:
  *   "Stage","SeqNr","Timestamp","Phase","Width","Vprim"
  *   "Stage","SeqNr","Timestamp [µs]","Phase","Width [µs]","Vprim [mV]"
+ *   "Stage","SeqNr","Timestamp [µs]","Phase","Width [µs]","Vprim [mV]","Electrodes"
  *
  * VIKTIGT om topologi: patterns312/* är inspelningar från Erostek ET-312,
  * INTE från NeoDK. ET-312 har två oberoende effektkanaler ("A" och "B"), var
@@ -14,7 +15,9 @@
  * Konsekvens: byte-för-byte replay-jämförelse går INTE. patterns312 är
  * användbart som referens för pace/width/biphasic-cadence + seqNr-timing
  * (outside-voice finding #1, ±50µs/±5% tolerance), inte för channel-routing.
- * NeoDK-output exporteras alltid som stage='A' (singel transformer).
+ * NeoDK-export hardcodar stage='A' (singel transformer) men lägger till
+ * "Electrodes"-kolumn (t.ex. "A>B", "AC<BD") som fångar switch-matrix-
+ * routingen som ET-312-formatet inte har plats för.
  */
 
 export interface RecordedPulse {
@@ -33,6 +36,12 @@ export interface RecordedPulse {
   widthMicros: number;
   /** Uppmätt primärspänning i millivolt */
   vprimMv: number;
+  /**
+   * Elektrod-routing per polaritets-explicit format ("A>B", "AC<BD", etc).
+   * Optional eftersom ET-312-inspelningar saknar denna kolumn — sätts av
+   * NeoDK-export från descriptor.electrodeSet via elconToPolarityLabel.
+   */
+  electrodes?: string;
 }
 
 export class CsvParseError extends Error {
@@ -42,11 +51,12 @@ export class CsvParseError extends Error {
   }
 }
 
-const HEADER_PATTERN = /^"?Stage"?,"?SeqNr"?,"?Timestamp(?:\s*\[µs\])?"?,"?Phase"?,"?Width(?:\s*\[µs\])?"?,"?Vprim(?:\s*\[mV\])?"?$/;
+const HEADER_PATTERN = /^"?Stage"?,"?SeqNr"?,"?Timestamp(?:\s*\[µs\])?"?,"?Phase"?,"?Width(?:\s*\[µs\])?"?,"?Vprim(?:\s*\[mV\])?"?(?:,"?Electrodes"?)?$/;
 
 /**
  * Parsa CSV-text till lista av RecordedPulse.
- * Tolerant mot trailing whitespace, tomma rader, både header-format.
+ * Tolerant mot trailing whitespace, tomma rader, alla tre header-format
+ * (med eller utan Electrodes-kolumn).
  */
 export function parsePatterns312Csv(text: string): RecordedPulse[] {
   const lines = text.split(/\r?\n/);
@@ -54,6 +64,7 @@ export function parsePatterns312Csv(text: string): RecordedPulse[] {
 
   // Find header line — skip leading blank lines
   let headerIdx = -1;
+  let hasElectrodes = false;
   for (let i = 0; i < lines.length; i++) {
     const trimmed = lines[i]!.trim();
     if (trimmed === '') continue;
@@ -63,19 +74,22 @@ export function parsePatterns312Csv(text: string): RecordedPulse[] {
         i + 1,
       );
     }
+    hasElectrodes = /Electrodes/.test(trimmed);
     headerIdx = i;
     break;
   }
   if (headerIdx < 0) return [];
+
+  const minFields = hasElectrodes ? 7 : 6;
 
   const out: RecordedPulse[] = [];
   for (let i = headerIdx + 1; i < lines.length; i++) {
     const line = lines[i]!.trim();
     if (line === '') continue;
     const parts = line.split(',');
-    if (parts.length < 6) {
+    if (parts.length < minFields) {
       throw new CsvParseError(
-        `Line ${i + 1} has ${parts.length} fields, expected 6: ${line.slice(0, 80)}`,
+        `Line ${i + 1} has ${parts.length} fields, expected ${minFields}: ${line.slice(0, 80)}`,
         i + 1,
       );
     }
@@ -91,7 +105,11 @@ export function parsePatterns312Csv(text: string): RecordedPulse[] {
     }
     const widthMicros = parseIntStrict(parts[4]!, i + 1, 'Width');
     const vprimMv = parseIntStrict(parts[5]!, i + 1, 'Vprim');
-    out.push({ stage, seqNr, timestampMicros, phase, widthMicros, vprimMv });
+    const pulse: RecordedPulse = { stage, seqNr, timestampMicros, phase, widthMicros, vprimMv };
+    if (hasElectrodes) {
+      pulse.electrodes = parts[6]!.trim();
+    }
+    out.push(pulse);
   }
   return out;
 }
@@ -105,17 +123,23 @@ function parseIntStrict(s: string, line: number, field: string): number {
 }
 
 /**
- * Serialize pulses to canonical patterns312-CSV-format (with units).
- * Used by mock-firmware/csv-export.ts to produce traces compatible with the
- * existing patterns312/ corpus.
+ * Serialize pulses to patterns312-CSV-format (with units).
+ *
+ * Om någon puls har electrodes-fält så emit:as Electrodes-kolumnen för ALLA
+ * rader (saknat fält → tom sträng). Bibehåller bakåt-kompatibilitet med
+ * ET-312-recordings som inte har kolumnen.
  */
 export function serializePatterns312Csv(pulses: readonly RecordedPulse[]): string {
+  const includeElectrodes = pulses.some((p) => p.electrodes !== undefined);
   const lines: string[] = [];
-  lines.push('"Stage","SeqNr","Timestamp [µs]","Phase","Width [µs]","Vprim [mV]"');
+  lines.push(
+    includeElectrodes
+      ? '"Stage","SeqNr","Timestamp [µs]","Phase","Width [µs]","Vprim [mV]","Electrodes"'
+      : '"Stage","SeqNr","Timestamp [µs]","Phase","Width [µs]","Vprim [mV]"',
+  );
   for (const p of pulses) {
-    lines.push(
-      `${p.stage},${p.seqNr},${p.timestampMicros},${p.phase},${p.widthMicros},${p.vprimMv}`,
-    );
+    const base = `${p.stage},${p.seqNr},${p.timestampMicros},${p.phase},${p.widthMicros},${p.vprimMv}`;
+    lines.push(includeElectrodes ? `${base},${p.electrodes ?? ''}` : base);
   }
   return lines.join('\n') + '\n';
 }

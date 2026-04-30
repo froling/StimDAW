@@ -1,15 +1,16 @@
 /**
- * CSV-export — DispatchedDescriptor[] → patterns312-CSV-format.
+ * CSV-export — DispatchedDescriptor[] → patterns312-CSV-format (utökad).
  *
  * Expanderar varje dispatched descriptor till nrOfPulses individuella pulser
- * (en rad per puls), formatet återanvänder patterns312-headern så att samma
- * verktyg/parser kan läsa både inspelningar och mock-output.
+ * (en rad per puls), formatet bygger på patterns312-headern + en NeoDK-
+ * specifik "Electrodes"-kolumn som fångar switch-matrix-routing.
  *
  * Topologi-not: patterns312/*.csv är ET-312-inspelningar (två oberoende
  * effektkanaler "A"/"B"). NeoDK är singel transformer + 4-elektrod switch
- * matrix — ingen channel-motsvarighet. NeoDK-export hardcodar stage='A'.
- * Strikt byte-replay går inte; jämförelser begränsas till pace/width/phase/
- * seqNr-timing (outside-voice #1 tolerance bands).
+ * matrix — ingen channel-motsvarighet. NeoDK-export hardcodar stage='A' och
+ * lägger till Electrodes-kolumnen ("A>B", "AC<BD" etc) så att switch-routing
+ * inte tappas. Vänster sida = alfabetiskt mindre elektrod-sträng;
+ * '>' = forward (vänster pos, höger neg); '<' = reverse polaritet.
  *
  * Per-pulse-expansion enligt PtDescriptor-spec:
  *   pulse i timestamp = startTimeMicros + Σ(j=0..i-1) (paceQuarterMs*250 + j*deltaPaceMicros)
@@ -23,6 +24,7 @@
 import type { DispatchedDescriptor } from './firmware';
 import type { RecordedPulse } from '../patterns/csv-format';
 import { serializePatterns312Csv } from '../patterns/csv-format';
+import { elconToPolarityLabel, type Elcon } from '../patterns/types';
 
 /** Vprim full-scale i millivolt — approximation för export-proxy. */
 const VPRIM_FULL_SCALE_MV = 3000;
@@ -42,6 +44,9 @@ export function dispatchedToPulses(
     const phase = (desc.phase & 0x01) as 0 | 1;
     const paceMicros = desc.paceQuarterMs * 250;
     let timestampMicros = desc.startTimeMicros;
+    // Beräkna polaritets-label en gång per descriptor (alla pulser i samma
+    // descriptor har samma electrodeSet → samma label).
+    const electrodes = elconToPolarityLabel(desc.electrodeSet as Elcon);
     for (let i = 0; i < desc.nrOfPulses; i++) {
       // Per-pulse pace ackumuleras med delta — pulse j använder
       // pace_j = paceMicros + j * deltaPaceMicros, så timestamp_i är summan
@@ -61,6 +66,7 @@ export function dispatchedToPulses(
         phase,
         widthMicros: Math.max(0, widthMicros),
         vprimMv,
+        electrodes,
       });
       pulseSeq++;
     }

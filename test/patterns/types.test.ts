@@ -3,6 +3,7 @@ import {
   ElectrodeMask,
   elconId,
   elconToLabel,
+  elconToPolarityLabel,
   isDisjoint,
   maskToString,
   maskUnion,
@@ -69,4 +70,31 @@ test('elconId: stabil sträng-ID', () => {
   expect(elconId([ElectrodeMask.A, ElectrodeMask.B])).not.toBe(
     elconId([ElectrodeMask.B, ElectrodeMask.A]),
   );
+});
+
+test('elconToPolarityLabel: forward — pos alfabetiskt mindre → ">"', () => {
+  expect(elconToPolarityLabel([ElectrodeMask.A, ElectrodeMask.B])).toBe('A>B');
+  expect(elconToPolarityLabel([ElectrodeMask.AC, ElectrodeMask.BD])).toBe('AC>BD');
+  expect(elconToPolarityLabel([ElectrodeMask.A, ElectrodeMask.D])).toBe('A>D');
+});
+
+test('elconToPolarityLabel: reverse — pos alfabetiskt större → "<"', () => {
+  expect(elconToPolarityLabel([ElectrodeMask.B, ElectrodeMask.A])).toBe('A<B');
+  expect(elconToPolarityLabel([ElectrodeMask.BD, ElectrodeMask.AC])).toBe('AC<BD');
+  expect(elconToPolarityLabel([ElectrodeMask.D, ElectrodeMask.A])).toBe('A<D');
+});
+
+test('elconToPolarityLabel: biphasic-flip pair hamnar i samma "lane"', () => {
+  // Samma fysiska par AB → vänster sida alltid 'A' oavsett polaritet
+  const forward = elconToPolarityLabel([ElectrodeMask.A, ElectrodeMask.B]);
+  const reverse = elconToPolarityLabel([ElectrodeMask.B, ElectrodeMask.A]);
+  expect(forward).toBe('A>B');
+  expect(reverse).toBe('A<B');
+  expect(forward.replace('>', '|')).toBe(reverse.replace('<', '|'));
+});
+
+test('elconToPolarityLabel: edge case — pos eller neg är 0', () => {
+  expect(elconToPolarityLabel([ElectrodeMask.A, 0])).toBe('A>');
+  expect(elconToPolarityLabel([0, ElectrodeMask.B])).toBe('>B');
+  expect(elconToPolarityLabel([0, 0])).toBe('0>0');
 });

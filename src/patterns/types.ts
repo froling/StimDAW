@@ -77,6 +77,34 @@ export function elconToLabel(elcon: Elcon): string {
   return `${maskToString(elcon[0])}↔${maskToString(elcon[1])}`;
 }
 
+/**
+ * Polaritets-explicit elcon-format för CSV-export och loggar:
+ *   pos=A, neg=B  → "A>B"   (forward — vänster är pos, ström flödar →)
+ *   pos=B, neg=A  → "A<B"   (reverse — alfabetiskt mindre sida alltid vänster)
+ *   pos=AC,neg=BD → "AC>BD"
+ *   pos=BD,neg=AC → "AC<BD"
+ *
+ * Konvention: vänster sida är alltid den lexikografiskt lägre elektrod-strängen
+ * så att samma fysiska par alltid hamnar i samma "lane" oavsett biphasic-flip.
+ * Det gör det lätt att upptäcka phase-flippade par i en lång CSV-rad.
+ *
+ * Edge cases:
+ *   - pos=0 eller neg=0: returns "{letters}>" eller ">{letters}" (otillåtet i
+ *     riktig descriptor men hanterar grace för debug)
+ *   - pos=neg=0: returns "0>0" (sentinel — bör aldrig hända)
+ */
+export function elconToPolarityLabel(elcon: Elcon): string {
+  const [pos, neg] = elcon;
+  if (pos === 0 && neg === 0) return '0>0';
+  const posStr = pos === 0 ? '' : maskToString(pos);
+  const negStr = neg === 0 ? '' : maskToString(neg);
+  if (posStr === '') return `>${negStr}`;
+  if (negStr === '') return `${posStr}>`;
+  // Alfabetiskt-mindre sida alltid till vänster — '>' = forward, '<' = reverse
+  if (posStr <= negStr) return `${posStr}>${negStr}`;
+  return `${negStr}<${posStr}`;
+}
+
 /** True om två masks är disjunkta (ingen elektrod i båda). */
 export function isDisjoint(a: ElectrodeMask, b: ElectrodeMask): boolean {
   return (a & b) === 0;

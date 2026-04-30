@@ -131,8 +131,49 @@ test('exportDispatchedAsCsv: round-trip via parsePatterns312Csv', () => {
   expect(parsed[2]!.timestampMicros).toBe(5200);
 });
 
-test('exportDispatchedAsCsv: tom input → bara header', () => {
+test('exportDispatchedAsCsv: tom input → bara header (utan Electrodes)', () => {
   const csv = exportDispatchedAsCsv([]);
-  // Header med units + trailing newline
+  // Tom input → ingen Electrodes-kolumn (back-compat header)
   expect(csv).toBe('"Stage","SeqNr","Timestamp [µs]","Phase","Width [µs]","Vprim [mV]"\n');
+});
+
+test('dispatchedToPulses: forward-polaritet → "A>B"', () => {
+  const desc = makeDescriptor({
+    electrodeSet: [0b0001, 0b0010], // pos=A, neg=B
+  });
+  const pulses = dispatchedToPulses([makeDispatched(desc)]);
+  expect(pulses[0]!.electrodes).toBe('A>B');
+});
+
+test('dispatchedToPulses: reverse-polaritet → "A<B"', () => {
+  const desc = makeDescriptor({
+    electrodeSet: [0b0010, 0b0001], // pos=B, neg=A
+  });
+  const pulses = dispatchedToPulses([makeDispatched(desc)]);
+  expect(pulses[0]!.electrodes).toBe('A<B');
+});
+
+test('dispatchedToPulses: multi-elektrod AC>BD', () => {
+  const desc = makeDescriptor({
+    electrodeSet: [0b0101, 0b1010], // pos=AC, neg=BD
+  });
+  const pulses = dispatchedToPulses([makeDispatched(desc)]);
+  expect(pulses[0]!.electrodes).toBe('AC>BD');
+});
+
+test('dispatchedToPulses: alla pulser i samma descriptor delar electrodes-label', () => {
+  const desc = makeDescriptor({
+    nrOfPulses: 4,
+    paceQuarterMs: 4,
+    electrodeSet: [0b1010, 0b0101], // pos=BD, neg=AC → reverse
+  });
+  const pulses = dispatchedToPulses([makeDispatched(desc)]);
+  expect(pulses.every((p) => p.electrodes === 'AC<BD')).toBe(true);
+});
+
+test('exportDispatchedAsCsv: NeoDK-export inkluderar Electrodes-kolumn', () => {
+  const desc = makeDescriptor({ electrodeSet: [0b0001, 0b0010] });
+  const csv = exportDispatchedAsCsv([makeDispatched(desc)]);
+  expect(csv).toContain('"Electrodes"');
+  expect(csv).toContain(',A>B');
 });
