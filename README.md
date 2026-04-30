@@ -70,6 +70,7 @@ scripts/            Codegen for attributes.ts from C headers
 - [Project brief](docs/STIMDAW_BRIEF.md) — vision, protocol summary, architecture
 - [α-wedge plan](docs/designs/ALPHA_WEDGE.md) — α1 plan with CEO + eng-review decisions
 - [α2 plan](docs/designs/ALPHA2_DESCRIPTOR_OSCILLOSCOPE.md) — α2 PT-descriptor stack + Oscilloscope
+- [β plan](docs/designs/BETA_MIXER_MODULAR_SYNTH.md) — β mixer + modular synth (Reason-style modulation)
 - [NeoDK protocol spec](reference/NeoDK/PulseTrainDescr.md) — pulse train descriptor format
 - [Changelog](CHANGELOG.md) — versioned summary of shipped features
 
