@@ -344,15 +344,33 @@
 </section>
 
 <style>
-  :global(:root) {
+  /* ──────────────────────────────────────────────────────────────────
+     Design tokens — single source-of-truth för Oscilloscope-dimensioner
+     och färger. Scope:ade till .osc (komponent-lokala) snarare än :root.
+     Ändra här → påverkar både desktop och mobile-breakpoint nedan.
+     ────────────────────────────────────────────────────────────────── */
+  .osc {
+    /* Trace colors */
     --trace-amp: #0066cc;
     --trace-vcap: #cc6600;
     --trace-pulse-width: #8844cc;
     --trace-pace: #44aa44;
     --trace-iprim: #008866;
-  }
 
-  .osc {
+    /* Chart heights — desktop */
+    --osc-chart-signed-h: 42px;
+    --osc-chart-timing-h: 16px;
+    --osc-chart-gap: 2px;
+
+    /* Row layout — desktop */
+    --osc-row-h: 76px;
+    --osc-row-h-hidden: 24px;
+    --osc-eye-col: 32px;
+    --osc-label-col: 130px;
+    --osc-readout-col: 80px;
+    --osc-row-padding-x: 1rem;
+    --osc-row-gap: 0.85rem;
+
     background: white;
     border: 1px solid #e5e5e5;
     border-radius: 8px;
@@ -416,7 +434,14 @@
   .osc-time-axis {
     display: flex;
     justify-content: space-between;
-    padding: 0.3rem 1rem 0.3rem calc(32px + 130px + 1rem + 0.85rem);
+    /* Padding-left aligns time-axis labels med chart-X start (efter eye-col +
+       label-col + row-padding + row-gap). Single source-of-truth via vars
+       så desktop/mobile hålls i sync. */
+    padding: 0.3rem 1rem 0.3rem
+      calc(
+        var(--osc-eye-col) + var(--osc-label-col) + var(--osc-row-padding-x) +
+          var(--osc-row-gap)
+      );
     font-family: ui-monospace, monospace;
     font-size: 0.7rem;
     color: #888;
@@ -442,20 +467,21 @@
   }
   .osc-row {
     display: grid;
-    grid-template-columns: 32px 130px 1fr 80px;
+    grid-template-columns:
+      var(--osc-eye-col) var(--osc-label-col) 1fr var(--osc-readout-col);
     align-items: center;
-    /* Höjd ökad från 56→76px för att rymma timing sub-chart (30% av total
-       chart-höjd). När pulse-width+pace toggles av krymper sub-chart men
-       rad-höjden är konstant så raderna inte hoppar runt. */
-    height: 76px;
-    padding: 0 1rem;
-    gap: 0.85rem;
+    /* Konstant rad-höjd även när timing sub-chart toggles av — undviker att
+       raderna hoppar runt vid legend-toggle. Charts-containern krymper inom
+       raden via .has-timing class. */
+    height: var(--osc-row-h);
+    padding: 0 var(--osc-row-padding-x);
+    gap: var(--osc-row-gap);
     font-family: ui-monospace, monospace;
     font-size: 0.85rem;
   }
   .osc-row.hidden {
-    grid-template-columns: 32px 130px 1fr;
-    height: 24px;
+    grid-template-columns: var(--osc-eye-col) var(--osc-label-col) 1fr;
+    height: var(--osc-row-h-hidden);
     opacity: 0.45;
   }
   .osc-row.hidden .osc-elcon {
@@ -495,31 +521,32 @@
   .osc-charts {
     display: flex;
     flex-direction: column;
-    gap: 2px;
-    /* Explicit höjd — utan denna kollapsar parent till 0 (align-items: center
-       på grid-raden gör att children inte stretchas) och svg-elementen tar då
-       sin viewBox-aspect-ratio över 1fr-bredden → enorma charts */
-    height: 44px;
+    gap: var(--osc-chart-gap);
+    /* Explicit pixel-höjd KRÄVS — align-items: center på grid-raden gör att
+       children inte stretchas till cell-höjd, och utan explicit height
+       kollapsar containern till 0 vilket får svg:erna att stretch:a över
+       hela 1fr-bredden enligt viewBox aspect-ratio (= enorma charts). */
+    height: var(--osc-chart-signed-h);
   }
   .osc-charts.has-timing {
-    /* Signed (42) + gap (2) + timing (16) = 60 */
-    height: 60px;
+    /* Signed + gap + timing — beräknas från single-source vars */
+    height: calc(
+      var(--osc-chart-signed-h) + var(--osc-chart-gap) +
+        var(--osc-chart-timing-h)
+    );
   }
   .osc-chart {
     background: #fafafa;
     border-radius: 3px;
     overflow: hidden;
     position: relative;
+    flex-shrink: 0;
   }
   .osc-chart-signed {
-    /* Biphasic amp/vcap chart */
-    height: 42px;
-    flex-shrink: 0;
+    height: var(--osc-chart-signed-h);
   }
   .osc-chart-timing {
-    /* pulse_width / pace staplar (0 i botten) */
-    height: 16px;
-    flex-shrink: 0;
+    height: var(--osc-chart-timing-h);
   }
   .osc-chart svg {
     display: block;
@@ -587,17 +614,14 @@
     font-weight: 600;
   }
 
+  /* Mobile breakpoint — bara override CSS vars, övriga selectors plockar
+     upp dem automatiskt (ingen duplicerad layout-logik). */
   @media (max-width: 720px) {
-    .osc-row {
-      grid-template-columns: 24px 100px 1fr 60px;
-      height: 70px;
-    }
-    .osc-row.hidden {
-      grid-template-columns: 24px 100px 1fr;
-      height: 24px;
-    }
-    .osc-time-axis {
-      padding-left: calc(24px + 100px + 1rem + 0.85rem);
+    .osc {
+      --osc-eye-col: 24px;
+      --osc-label-col: 100px;
+      --osc-readout-col: 60px;
+      --osc-row-h: 70px;
     }
   }
 </style>

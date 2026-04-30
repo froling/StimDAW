@@ -7,17 +7,20 @@
  *
  * Hardware-bounds från reference/NeoDK/firmware/inc/burst.h:
  *   PULSE_WIDTH: 2µs..200µs
- *   PACE:        5ms..62.5ms
+ *   PACE:        5ms..62.5ms (16Hz min, 200Hz max)
  *
- * Procent-mapping är linjär mellan min och max — värden utanför clampar till
- * 0% resp 100%. Detta är intentionellt eftersom hardware också clampar dessa.
+ * Procent-mapping är 0..MAX (inte MIN..MAX). Motivering: vid MIN..MAX-mapping
+ * blir Jackhammer's 7ms pace = 3.5% = sub-pixel-osynligt i timing-charten.
+ * 0..MAX gör att stapelhöjd är proportionell till absolut värde — pace=7ms
+ * ger 11% (synligt), pace=62.5ms ger 100%. Värden över MAX clampar till 100%
+ * (matchar firmware-clamping).
  */
 import type { PtDescriptor } from '../protocol/descriptor';
 
-export const PULSE_WIDTH_MIN_MICROS = 2;
+export const PULSE_WIDTH_MIN_MICROS = 2; // hardware floor (defense)
 export const PULSE_WIDTH_MAX_MICROS = 200;
-export const PACE_MIN_MICROS = 5_000; // 5ms
-export const PACE_MAX_MICROS = 62_500; // 62.5ms (16Hz min)
+export const PACE_MIN_MICROS = 5_000; // 5ms = 200Hz (hardware floor, defense)
+export const PACE_MAX_MICROS = 62_500; // 62.5ms = 16Hz
 
 /**
  * Mean pulse_width µs över descriptor's nrOfPulses, inkl delta-ramping.
@@ -51,23 +54,19 @@ export function meanPaceMicros(d: PtDescriptor): number {
 }
 
 /**
- * Mappa pulse_width µs → procent av hardware-range (PULSE_WIDTH_MIN..MAX).
- * Returns 0..1 (clamped). 2µs → 0, 200µs → 1.
+ * Mappa pulse_width µs → procent av PULSE_WIDTH_MAX (0..MAX, inte MIN..MAX).
+ * Returns 0..1 (clamped). 0µs → 0%, 200µs → 100%, 144µs → 72%.
  */
-export function pulseWidthPercent(microns: number): number {
-  if (!Number.isFinite(microns)) return 0;
-  const range = PULSE_WIDTH_MAX_MICROS - PULSE_WIDTH_MIN_MICROS;
-  const t = (microns - PULSE_WIDTH_MIN_MICROS) / range;
-  return Math.max(0, Math.min(1, t));
+export function pulseWidthPercent(micros: number): number {
+  if (!Number.isFinite(micros) || micros <= 0) return 0;
+  return Math.min(1, micros / PULSE_WIDTH_MAX_MICROS);
 }
 
 /**
- * Mappa pace µs → procent av hardware-range (PACE_MIN..MAX).
- * Returns 0..1 (clamped). 5ms → 0, 62.5ms → 1.
+ * Mappa pace µs → procent av PACE_MAX (0..MAX, inte MIN..MAX).
+ * Returns 0..1 (clamped). 0µs → 0%, 62.5ms → 100%, 7ms → 11%.
  */
 export function pacePercent(micros: number): number {
-  if (!Number.isFinite(micros)) return 0;
-  const range = PACE_MAX_MICROS - PACE_MIN_MICROS;
-  const t = (micros - PACE_MIN_MICROS) / range;
-  return Math.max(0, Math.min(1, t));
+  if (!Number.isFinite(micros) || micros <= 0) return 0;
+  return Math.min(1, micros / PACE_MAX_MICROS);
 }

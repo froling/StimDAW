@@ -76,45 +76,55 @@ test('meanPaceMicros: positiv delta ramping → mean > base', () => {
   expect(meanPaceMicros(d)).toBe(25_150);
 });
 
-test('pulseWidthPercent: hardware-min → 0', () => {
-  expect(pulseWidthPercent(PULSE_WIDTH_MIN_MICROS)).toBe(0);
+test('pulseWidthPercent: 0 → 0%', () => {
+  expect(pulseWidthPercent(0)).toBe(0);
 });
 
-test('pulseWidthPercent: hardware-max → 1', () => {
+test('pulseWidthPercent: hardware-max (200µs) → 100%', () => {
   expect(pulseWidthPercent(PULSE_WIDTH_MAX_MICROS)).toBe(1);
 });
 
-test('pulseWidthPercent: 144µs (default) → ~71.7%', () => {
-  // (144 - 2) / (200 - 2) = 142/198 ≈ 0.717
-  expect(pulseWidthPercent(144)).toBeCloseTo(0.7172, 3);
+test('pulseWidthPercent: 144µs (default) → 72%', () => {
+  // 144 / 200 = 0.72
+  expect(pulseWidthPercent(144)).toBeCloseTo(0.72, 3);
 });
 
-test('pulseWidthPercent: clamps under min och över max', () => {
-  expect(pulseWidthPercent(0)).toBe(0); // under min
-  expect(pulseWidthPercent(-50)).toBe(0); // way under
-  expect(pulseWidthPercent(500)).toBe(1); // over max (firmware skulle clampa)
+test('pulseWidthPercent: hardware-min 2µs → 1% (synligt)', () => {
+  // 2 / 200 = 0.01
+  expect(pulseWidthPercent(PULSE_WIDTH_MIN_MICROS)).toBeCloseTo(0.01, 3);
 });
 
-test('pacePercent: hardware-min (5ms) → 0', () => {
-  expect(pacePercent(PACE_MIN_MICROS)).toBe(0);
+test('pulseWidthPercent: clamps negativa och över-max', () => {
+  expect(pulseWidthPercent(-50)).toBe(0);
+  expect(pulseWidthPercent(500)).toBe(1); // firmware clampar
 });
 
-test('pacePercent: hardware-max (62.5ms) → 1', () => {
+test('pacePercent: 0 → 0%', () => {
+  expect(pacePercent(0)).toBe(0);
+});
+
+test('pacePercent: hardware-max (62.5ms) → 100%', () => {
   expect(pacePercent(PACE_MAX_MICROS)).toBe(1);
 });
 
-test('pacePercent: Toggle 25ms → ~34.8%', () => {
-  // (25_000 - 5_000) / (62_500 - 5_000) = 20_000/57_500
-  expect(pacePercent(25_000)).toBeCloseTo(0.3478, 3);
+test('pacePercent: Toggle 25ms → 40%', () => {
+  // 25_000 / 62_500 = 0.4
+  expect(pacePercent(25_000)).toBeCloseTo(0.4, 3);
 });
 
-test('pacePercent: Jackhammer 7ms → ~3.5%', () => {
-  expect(pacePercent(7_000)).toBeCloseTo(0.0348, 3);
+test('pacePercent: Jackhammer 7ms → 11.2% (synligt, var 3.5% pre-fix)', () => {
+  // 7_000 / 62_500 = 0.112
+  expect(pacePercent(7_000)).toBeCloseTo(0.112, 3);
 });
 
-test('pacePercent: clamps under och över hardware-bounds', () => {
-  expect(pacePercent(1_000)).toBe(0); // under 5ms min
-  expect(pacePercent(100_000)).toBe(1); // över 62.5ms max
+test('pacePercent: hardware-min 5ms → 8% (synligt)', () => {
+  // 5_000 / 62_500 = 0.08
+  expect(pacePercent(PACE_MIN_MICROS)).toBeCloseTo(0.08, 3);
+});
+
+test('pacePercent: clamps negativa och över-max', () => {
+  expect(pacePercent(-1_000)).toBe(0);
+  expect(pacePercent(100_000)).toBe(1);
 });
 
 test('pulseWidthPercent + pacePercent: NaN/Infinity → 0', () => {
