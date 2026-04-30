@@ -2,8 +2,15 @@
   import { app, toggleElconVisibility, toggleTrace } from './stores.svelte';
   import { uniqueElcons, elconId, elconToLabel, type Elcon } from '../patterns/types';
   import type { WaveformSample } from '../mock-firmware/waveform';
+  import {
+    meanPulseWidthMicros,
+    meanPaceMicros,
+    pulseWidthPercent,
+    pacePercent,
+  } from './descriptor-timing';
+  import type { DispatchedDescriptor } from '../mock-firmware/firmware';
 
-  // Layout-konstanter (matchar approved.html)
+  // Layout-konstanter — top chart (signed amp/vcap, 70% rad-höjd)
   const VIEW_W = 100;
   const VIEW_H = 40;
   const Y_PAD = 2;
@@ -11,6 +18,12 @@
   const HALF_H = (VIEW_H - 2 * Y_PAD) / 2;
   const WINDOW_MICROS = 6_000_000; // 6s rolling window per design lock
   const VCAP_MAX = 80_000; // mV — full-scale för vcap-magnitud
+
+  // Timing sub-chart — 30% rad-höjd, 0-baseline botten
+  const TIMING_VIEW_H = 17; // viewBox-höjd för timing sub-chart
+  const TIMING_Y_PAD = 1;
+  const TIMING_BAR_W = 0.6; // bredd på varje stapel (SVG units)
+  const TIMING_BAR_GAP = 0.1; // gap mellan pulse-width och pace inom samma descriptor
 
   /**
    * Tid → x-koordinat. Senaste sample (timestamp == nowMicros) hamnar vid x=100,
@@ -95,17 +108,57 @@
     return Math.round(last.vcap / 1000);
   }
 
-  // Reactive: lista av rows från currentPattern + buffers
+  /**
+   * Filtrera dispatched-descriptors till de som hör till denna rad's elcon
+   * OCH ligger inom 6s rolling window. Bevarar ordning (descTime stigande).
+   */
+  function timingBarsForRow(
+    dispatched: readonly DispatchedDescriptor[],
+    elcId: string,
+    nowMicros: number,
+  ): DispatchedDescriptor[] {
+    const start = nowMicros - WINDOW_MICROS;
+    const out: DispatchedDescriptor[] = [];
+    for (const d of dispatched) {
+      if (d.dispatchedAtMicros < start) continue;
+      if (d.dispatchedAtMicros > nowMicros) break; // future = utanför window
+      const id = `${d.descriptor.electrodeSet[0]}-${d.descriptor.electrodeSet[1]}`;
+      if (id !== elcId) continue;
+      out.push(d);
+    }
+    return out;
+  }
+
+  /** Procent → y-koordinat i timing sub-chart (0% botten, 100% topp). */
+  function timingPercentToY(pct: number): number {
+    return TIMING_VIEW_H - TIMING_Y_PAD - pct * (TIMING_VIEW_H - 2 * TIMING_Y_PAD);
+  }
+
+  /** Senaste descriptor's mean pulse_width µs för readout. */
+  function lastPulseWidthMicros(bars: readonly DispatchedDescriptor[]): number {
+    if (bars.length === 0) return 0;
+    return Math.round(meanPulseWidthMicros(bars[bars.length - 1]!.descriptor));
+  }
+
+  /** Senaste descriptor's mean pace µs för readout. */
+  function lastPaceMicros(bars: readonly DispatchedDescriptor[]): number {
+    if (bars.length === 0) return 0;
+    return Math.round(meanPaceMicros(bars[bars.length - 1]!.descriptor));
+  }
+
+  // Reactive: lista av rows från currentPattern + buffers + timing-bars
   type RowInfo = {
     id: string;
     elcon: Elcon;
     label: string;
     visible: boolean;
     samples: WaveformSample[];
+    timingBars: DispatchedDescriptor[];
   };
 
   let rows = $derived.by((): RowInfo[] => {
     if (!app.currentPattern) return [];
+    const now = app.waveformNowMicros;
     return uniqueElcons(app.currentPattern.elcons).map((elcon) => {
       const id = elconId(elcon);
       return {
@@ -114,6 +167,7 @@
         label: elconToLabel(elcon),
         visible: app.visibleElcons.has(id),
         samples: app.waveformBuffers.get(id) ?? [],
+        timingBars: timingBarsForRow(app.dispatchedDescriptors, id, now),
       };
     });
   });
@@ -123,6 +177,9 @@
   let traceCount = $derived(app.activeTraces.size);
   let ampActive = $derived(app.activeTraces.has('amp'));
   let vcapActive = $derived(app.activeTraces.has('vcap'));
+  let pulseWidthActive = $derived(app.activeTraces.has('pulse-width'));
+  let paceActive = $derived(app.activeTraces.has('pace'));
+  let timingActive = $derived(pulseWidthActive || paceActive);
 </script>
 
 <section class="osc">
@@ -156,6 +213,26 @@
       <span class="legend-swatch" style="background:var(--trace-vcap,#cc6600)"></span>
       Vcap
     </button>
+    <button
+      type="button"
+      class="legend-item"
+      class:off={!pulseWidthActive}
+      onclick={() => toggleTrace('pulse-width')}
+      title="pulse_width µs (2..200) som % av hardware-range"
+    >
+      <span class="legend-swatch" style="background:var(--trace-pulse-width,#8844cc)"></span>
+      pulse width
+    </button>
+    <button
+      type="button"
+      class="legend-item"
+      class:off={!paceActive}
+      onclick={() => toggleTrace('pace')}
+      title="pace µs (5ms..62.5ms) som % av hardware-range"
+    >
+      <span class="legend-swatch" style="background:var(--trace-pace,#44aa44)"></span>
+      pace
+    </button>
     <span class="legend-future">+ add trace…</span>
   </div>
 
@@ -185,20 +262,63 @@
           </button>
           <span class="osc-elcon">{row.label}</span>
           {#if row.visible}
-            <div class="osc-chart">
-              <svg viewBox="0 0 100 40" preserveAspectRatio="none">
-                <!-- ±50% guide-linjer (extra svaga) -->
-                <line class="grid-line" x1="0" y1="11" x2="100" y2="11" />
-                <line class="grid-line" x1="0" y1="29" x2="100" y2="29" />
-                <!-- 0-baseline i mitten (svag grå) — visuell referens för biphasic polaritet -->
-                <line class="baseline-zero" x1="0" y1="20" x2="100" y2="20" />
-                {#if vcapActive && row.samples.length > 1}
-                  <path class="trace-vcap" d={buildVcapPath(row.samples, app.waveformNowMicros)} />
-                {/if}
-                {#if ampActive && row.samples.length > 0}
-                  <path class="trace-amp" d={buildAmpPath(row.samples, app.waveformNowMicros)} />
-                {/if}
-              </svg>
+            <div class="osc-charts">
+              <!-- Top chart: amp/vcap signed (70% rad-höjd) -->
+              <div class="osc-chart osc-chart-signed">
+                <svg viewBox="0 0 100 40" preserveAspectRatio="none">
+                  <!-- ±50% guide-linjer (extra svaga) -->
+                  <line class="grid-line" x1="0" y1="11" x2="100" y2="11" />
+                  <line class="grid-line" x1="0" y1="29" x2="100" y2="29" />
+                  <!-- 0-baseline i mitten (svag grå) — biphasic polaritet -->
+                  <line class="baseline-zero" x1="0" y1="20" x2="100" y2="20" />
+                  {#if vcapActive && row.samples.length > 1}
+                    <path class="trace-vcap" d={buildVcapPath(row.samples, app.waveformNowMicros)} />
+                  {/if}
+                  {#if ampActive && row.samples.length > 0}
+                    <path class="trace-amp" d={buildAmpPath(row.samples, app.waveformNowMicros)} />
+                  {/if}
+                </svg>
+              </div>
+              <!-- Bottom chart: timing (pulse_width / pace) som vertikala staplar
+                   per dispatched descriptor. 0 längst ner, 100% längst upp.
+                   Hardware-range: pw 2..200µs, pace 5..62.5ms. -->
+              {#if timingActive}
+                <div class="osc-chart osc-chart-timing">
+                  <svg viewBox="0 0 100 {TIMING_VIEW_H}" preserveAspectRatio="none">
+                    <line
+                      class="baseline-zero"
+                      x1="0"
+                      y1={TIMING_VIEW_H - TIMING_Y_PAD}
+                      x2="100"
+                      y2={TIMING_VIEW_H - TIMING_Y_PAD}
+                    />
+                    {#each row.timingBars as bar (bar.dispatchedAtMicros + '-' + bar.descriptor.sequenceNumber)}
+                      {@const barX = timeToX(bar.dispatchedAtMicros, app.waveformNowMicros)}
+                      {@const pwY = timingPercentToY(pulseWidthPercent(meanPulseWidthMicros(bar.descriptor)))}
+                      {@const paY = timingPercentToY(pacePercent(meanPaceMicros(bar.descriptor)))}
+                      {@const yBase = TIMING_VIEW_H - TIMING_Y_PAD}
+                      {#if pulseWidthActive}
+                        <rect
+                          class="bar-pulse-width"
+                          x={(barX - TIMING_BAR_W - TIMING_BAR_GAP / 2).toFixed(2)}
+                          y={pwY.toFixed(2)}
+                          width={TIMING_BAR_W}
+                          height={(yBase - pwY).toFixed(2)}
+                        />
+                      {/if}
+                      {#if paceActive}
+                        <rect
+                          class="bar-pace"
+                          x={(barX + TIMING_BAR_GAP / 2).toFixed(2)}
+                          y={paY.toFixed(2)}
+                          width={TIMING_BAR_W}
+                          height={(yBase - paY).toFixed(2)}
+                        />
+                      {/if}
+                    {/each}
+                  </svg>
+                </div>
+              {/if}
             </div>
             <span class="osc-readout">
               {#if ampActive}
@@ -206,6 +326,14 @@
               {/if}
               {#if vcapActive}
                 <span class="osc-readout-vcap">{lastVcapVolts(row.samples)}V</span>
+              {/if}
+              {#if pulseWidthActive}
+                <span class="osc-readout-pw">{lastPulseWidthMicros(row.timingBars)}µs</span>
+              {/if}
+              {#if paceActive}
+                <span class="osc-readout-pa"
+                  >{(lastPaceMicros(row.timingBars) / 1000).toFixed(1)}ms</span
+                >
               {/if}
             </span>
           {/if}
@@ -219,6 +347,8 @@
   :global(:root) {
     --trace-amp: #0066cc;
     --trace-vcap: #cc6600;
+    --trace-pulse-width: #8844cc;
+    --trace-pace: #44aa44;
     --trace-iprim: #008866;
   }
 
@@ -314,7 +444,10 @@
     display: grid;
     grid-template-columns: 32px 130px 1fr 80px;
     align-items: center;
-    height: 56px;
+    /* Höjd ökad från 56→76px för att rymma timing sub-chart (30% av total
+       chart-höjd). När pulse-width+pace toggles av krymper sub-chart men
+       rad-höjden är konstant så raderna inte hoppar runt. */
+    height: 76px;
     padding: 0 1rem;
     gap: 0.85rem;
     font-family: ui-monospace, monospace;
@@ -359,12 +492,25 @@
     letter-spacing: 0.02em;
   }
 
+  .osc-charts {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    height: 100%;
+  }
   .osc-chart {
-    height: 44px;
     background: #fafafa;
     border-radius: 3px;
     overflow: hidden;
     position: relative;
+  }
+  .osc-chart-signed {
+    /* 70% av rad-höjden — biphasic amp/vcap */
+    flex: 7;
+  }
+  .osc-chart-timing {
+    /* 30% av rad-höjden — pulse_width / pace staplar (0 i botten) */
+    flex: 3;
   }
   .osc-chart svg {
     display: block;
@@ -394,6 +540,14 @@
     stroke-opacity: 0.85;
     vector-effect: non-scaling-stroke;
   }
+  .bar-pulse-width {
+    fill: var(--trace-pulse-width);
+    fill-opacity: 0.85;
+  }
+  .bar-pace {
+    fill: var(--trace-pace);
+    fill-opacity: 0.85;
+  }
 
   .osc-readout {
     text-align: right;
@@ -413,14 +567,25 @@
     font-size: 0.7rem;
     font-weight: 600;
   }
+  .osc-readout-pw {
+    color: var(--trace-pulse-width);
+    font-size: 0.7rem;
+    font-weight: 600;
+  }
+  .osc-readout-pa {
+    color: var(--trace-pace);
+    font-size: 0.7rem;
+    font-weight: 600;
+  }
 
   @media (max-width: 720px) {
     .osc-row {
       grid-template-columns: 24px 100px 1fr 60px;
-      height: 52px;
+      height: 70px;
     }
     .osc-row.hidden {
       grid-template-columns: 24px 100px 1fr;
+      height: 24px;
     }
     .osc-time-axis {
       padding-left: calc(24px + 100px + 1rem + 0.85rem);

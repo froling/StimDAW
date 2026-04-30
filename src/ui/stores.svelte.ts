@@ -60,8 +60,15 @@ class AppState {
   waveformNowMicros = $state<number>(0);
   /** Vilka elcons som ska visas i oscilloscope (eye toggle). */
   visibleElcons = $state<Set<string>>(new Set());
-  /** Vilka traces som ritas (amp alltid på, vcap optional, etc.). */
-  activeTraces = $state<Set<'amp' | 'vcap'>>(new Set(['amp']));
+  /**
+   * Vilka traces som ritas i Oscilloscope. Två zoner:
+   *   - signed (amp/vcap): biphasic, 0-baseline i mitten av top-charten
+   *   - timing (pulse-width/pace): unsigned, 0-baseline botten av sub-charten
+   * Hardware-bounds: pulse-width 2..200µs, pace 5..62.5ms (firmware burst.h).
+   */
+  activeTraces = $state<Set<'amp' | 'vcap' | 'pulse-width' | 'pace'>>(
+    new Set(['amp', 'pulse-width', 'pace']),
+  );
   /**
    * Host-sidans dispatched-buffer: vad pattern-runnern faktiskt skickade
    * via writePtDescriptor + förväntad sim-tid (descTime). Capped så vi
@@ -459,8 +466,10 @@ export function toggleElconVisibility(eId: string): void {
   app.visibleElcons = next;
 }
 
-/** Toggle a trace (amp/vcap) on/off across all rows. */
-export function toggleTrace(trace: 'amp' | 'vcap'): void {
+/** Toggle a trace on/off across all rows. */
+export function toggleTrace(
+  trace: 'amp' | 'vcap' | 'pulse-width' | 'pace',
+): void {
   const next = new Set(app.activeTraces);
   if (next.has(trace)) next.delete(trace);
   else next.add(trace);
