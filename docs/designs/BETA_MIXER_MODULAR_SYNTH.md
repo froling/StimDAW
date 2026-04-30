@@ -219,30 +219,93 @@ src/synth/                    (NY MODUL — modular synth core)
   ├── waveforms.ts            sine/saw/square/triangle pure functions
   ├── lfo.ts                  computeLfoSignal(lfo, t) → -1..+1
   ├── synth-engine.ts         tick() emits PtDescriptors via sink callback
-  └── bounds.ts               PW_BOUNDS, PACE_BOUNDS, AMP_BOUNDS hardware-clamps
+  └── state.ts                Pure data + actions (eng-review 1.2A: ej i .svelte.ts
+                              så bun-test kan köra utan Svelte runtime)
+
+src/protocol/
+  └── hardware-bounds.ts      (NY per eng-review 2.2A) PULSE_WIDTH/PACE bounds från
+                              firmware/inc/burst.h. Single source-of-truth — både
+                              src/synth och src/ui/descriptor-timing importerar.
+
+src/safety/
+  └── clamp.ts                (NY per eng-review 2.3A) Single chokepoint clampAmp
+                              flyttad från waveform.ts. Synth-engine + waveform
+                              importerar härifrån (outside-voice #3 bevarat).
 
 src/ui/synth/                 (NY MODUL — mixer UI)
-  ├── synth-store.svelte.ts   MixerState som $state, actions för knob/cable-mut
+  ├── synth-store.svelte.ts   Tunn Svelte 5 runes-adapter över src/synth/state.ts
+  ├── knob-helpers.ts         Pure: dragDeltaToValue, log-scale konvertering
+  ├── cable-helpers.ts        Pure: bezierPath(x1,y1,x2,y2) → SVG d-string
   ├── Knob.svelte             Reusable rotating knob med drag-att-justera
   ├── MixerChannel.svelte     Channel-strip: 3 knobs + cable-ports
   ├── LFOModule.svelte        LFO-panel: rate/amount/shape + output-port
-  ├── CableLayer.svelte       SVG-overlay för bezier-wires
+  ├── CableLayer.svelte       SVG-overlay för bezier-wires (pointer-events: none,
+                              path:stroke per eng-review 1.6A)
   └── Mixer.svelte            Top-level panel komponerar alla ovan
 
-src/ui/App.svelte             (UTÖKAS) lägg till Mixer alongside Oscilloscope
+src/ui/App.svelte             (UTÖKAS) lägg till Mixer alongside Oscilloscope.
+                              PatternRunnerBar och Mixer mutually-exclusive UI-state
+                              (eng-review 1.3A).
 
 test/synth/
-  ├── waveforms.test.ts       Sine cycle = 2π, saw -1..+1 monotonic, square ±1
-  ├── lfo.test.ts             Phase advancement, rate-change behavior
-  ├── synth-engine.test.ts    Knob evaluation, tick semantics, bounds clamping
-  └── bounds.test.ts          Clamp-edge cases
+  ├── waveforms.test.ts       ~12 cases: sine cycle = 2π, saw -1..+1 monotonic,
+  │                            square ±1 boundary, triangle peaks/valleys, edge
+  │                            values (phase=0, π, 2π, wrap)
+  ├── lfo.test.ts             ~8 cases: phase advancement, rate change halves
+  │                            period, amount=0 silences, rate=0 (DC, no NaN),
+  │                            shape switching
+  ├── synth-engine.test.ts    ~20 cases:
+  │                            • evaluateKnob: base-only, signal=0/+1/-1, depth=0/0.5/1,
+  │                              clamp under-min/over-max, depth × amount × range
+  │                            • tick: emit when due, skip when not due,
+  │                              GAP-A phase-flip per channel (CRITICAL 2.1A safety),
+  │                              multi-channel interleave, sequenceNumber wrap at 256
+  │                            • GAP-F generation pattern: stop → pending events
+  │                              no-op vid fire (per 2.5A)
+  │                            • bounds clamping integration
+  ├── bounds-shared.test.ts   GAP-C: src/synth importerar samma konstanter som
+  │                            src/ui/descriptor-timing.ts (skydda mot split)
+  └── state.test.ts           ~10 cases: addChannel, addLfo, addCable mutators,
+                               GAP-G cascade-delete invariants (removeLfo →
+                               cables filtered, removeChannel → cables filtered),
+                               mode mutex (1.3A), state-invariant: alla cables
+                               pekar på existing LFOs+channels
+
+test/ui/synth/                (pure helpers — Svelte runtime ej required)
+  ├── knob-helpers.test.ts    GAP-D: ~6 cases — drag-to-value formula, Shift
+  │                            fine-grain (10x sensitivity), log-scale: tToValue(0)
+  │                            = PACE_MIN, tToValue(1) = PACE_MAX, tToValue(0.5)
+  │                            ≈ √(MIN×MAX) (geometric mean)
+  └── cable-helpers.test.ts   GAP-E: ~4 cases — bezierPath d-string format,
+                               control points correctness, edge cases (port på
+                               varandra, vertical line)
 
 test/integration/
-  └── mixer-flow.test.ts      Channel + LFO + cable → descriptors emitted with
-                              expected pulse_width oscillation pattern
+  └── mixer-flow.test.ts      ~5 cases:
+                              • 1 channel + 1 LFO + 1 cable, advance through
+                                full LFO period, assert pulse_width oscillates
+                                expected min/max
+                              • Cable removal: knob reverts till base
+                              • Multi-channel different paces: emits interleave
+                                korrekt (channel A pace=7ms, channel B pace=25ms)
+                              • GAP-B: STOP-mid-flight (CRITICAL safety) —
+                                mirror existing STOP-stuck-queue test, drain
+                                pending, no late dispatches efter stop
+                              • Multi-LFO independence: rate change på LFO A
+                                påverkar inte cable LFO B → channel C
 ```
 
-Total: ~12 nya filer, 1 utökning. Inom rimlig β.0-scope.
+Total: ~15 nya filer (12 src + 3 test-extras), 1 utökning. **~70 nya tester
+target. Project-totalt ≈ 320 tests (var 248).**
+
+**Test gaps lyfta i eng-review** (alla in-scope):
+- **GAP-A** (CRITICAL): per-channel phase-flip explicit assertion
+- **GAP-B** (CRITICAL): STOP-mid-flight safety integration test
+- **GAP-C**: hardware-bounds shared constant test
+- **GAP-D**: knob log-scale conversion test
+- **GAP-E**: cable bezier-path test
+- **GAP-F**: SynthEngine generation-pattern test
+- **GAP-G**: cascade-delete state-invariant test
 
 ## Temporal Interrogation (Hours 1-6+)
 
@@ -408,21 +471,141 @@ Phase 4: Composition + integration
 Phase 1+2 kan göras klart utan UI rendering — pure data + tests. Phase 3 är
 "cable wrestling" — räkna med extra tid där.
 
-## Eng-review handoff context
+## Eng-review locks (2026-05-01)
 
-**Frågor som väntar på /plan-eng-review:**
-- Tick-rate val: 1ms vs 5ms vs SimClock-event-per-channel?
-- Knob.svelte UX: vertical-drag, scroll-wheel, double-click reset semantics?
-- CableLayer pointer-events: hur hantera klick "genom" cables för att nå knobs?
-- Ska Mixer ersätta PatternRunnerBar i UI, eller co-existera under β-perioden?
-- State-persist via stores: hur synca när window unloads (utan E8)?
+Plan reviewed via `/plan-eng-review` 2026-05-01. All scope-impacting decisions
+locked nedan. Implementation följer dessa.
+
+**Architecture:**
+- **1.1A** Tick-strategy: event-driven per-channel via `Clock`-interface.
+  `clock.scheduleAt(nextEmitMicros, () => emit_and_reschedule)`. Återanvänder
+  mock-firmware:s SimClock-paradigm. Real-mode: `RealtimeClock` adapter följer
+  samma interface. Ingen wasted CPU, sample-perfekt timing.
+- **1.2A** State-arkitektur: `src/synth/state.ts` är pure TS data + actions.
+  `src/ui/synth/synth-store.svelte.ts` är tunn Svelte 5 runes-adapter. Engine
+  läser direkt från pure-state. Skyddar mot bun-test-Svelte-runtime-pitfall
+  (känt från α2 csv-filename-incident).
+- **1.3A** Mixer/PatternRunnerBar mutually-exclusive: global "active source"
+  lock. När Mixer är aktiv → PatternRunnerBar disabled (och vice versa).
+  Ingen racing till `client.writePtDescriptor`.
+
+**UI semantics:**
+- **1.4A** Knob: vertikal drag (DAW-standard), Shift = fine-grain (10x
+  sensitivity), **log-scale för pace** (4 dekader: 5ms..62.5ms), double-click =
+  reset till default (pw=144µs, pace=25ms, amp=128).
+- **1.5A** En cable per knob i β.0. Drag-drop på upptaget = replace existing.
+  Multi-cable summation är γ.
+- **1.6A** CableLayer SVG: `pointer-events: none` på `<svg>`, `pointer-events:
+  stroke` på `<path>`. Drag-creation startar från port-DOM-elementen själva,
+  inte från SVG-layer. Knobs förblir klickbara genom cables.
+
+**Code Quality:**
+- **2.1A** Per-channel polarity-flip per emit (CRITICAL safety — undviker DC-
+  stim). Channel håller `lastPhase: 0|1`, alternates per emit. Phase=0
+  hardcoded i tidigare draft var fel.
+- **2.2A** Hardware-bounds till `src/protocol/hardware-bounds.ts` —
+  single source-of-truth. Både `src/synth` och `src/ui/descriptor-timing`
+  importerar (DRY).
+- **2.3A** `clampAmp` flyttas till `src/safety/clamp.ts`. Synth-engine +
+  waveform.ts importerar. Bevarar outside-voice #3 single chokepoint.
+- **2.4A** Cascade-delete: `removeLfo(id)` + `removeChannel(id)` filtrerar
+  bort relaterade cables. State-invariant: cables.every(c => sourceExists &&
+  destExists).
+- **2.5A** SynthEngine generation-pattern: `running: boolean` + `generation:
+  number`. Schedule-callbacks captures generation, no-op vid mismatch.
+  Mirror exakt mock-firmware:s `ptQueueGeneration`.
+- **2.6** SeqNr private state i SynthEngine: `private seqNr: number = 0;
+  nextSeqNr()` wrap at 256. Matchar `firmware.ts:txSeq`-pattern.
+
+**Test gaps lyfta:**
+- **GAP-A** (CRITICAL): Per-channel phase-flip explicit assertion i
+  synth-engine.test.ts. Skyddar mot DC-regression.
+- **GAP-B** (CRITICAL): STOP-mid-flight integration test i mixer-flow.test.ts.
+  Mirror existing pt-descriptor-flow-STOP-stuck-queue-test.
+- **GAP-C** Hardware-bounds shared constant test.
+- **GAP-D** Knob log-scale conversion test (geometric mean).
+- **GAP-E** Cable bezier-path test.
+- **GAP-F** SynthEngine generation-pattern test.
+- **GAP-G** Cascade-delete state-invariant test.
+
+**Performance (accepted, monitor):**
+- **4.2A** O(N²) `array.find`-pattern per emit accepterad för β.0 (max 10
+  cables). TODO i synth-engine.ts: bench när channels > 10.
+- **4.3A** Svelte 5 reactivity verifieras vid implementation; bench i Chrome
+  DevTools om jank uppstår.
+- **4.4A** GC från PtDescriptor-allokeringar accepteras. V8 minor GC är
+  optimerad för 570 small objs/s.
+
+## Failure modes (eng-review identified)
+
+| Failure | Test? | Error handling? | User sees |
+|---|---|---|---|
+| LFO rate=0 (DC mode) | GAP in lfo.test.ts | Outputs 0 (sine(0)=0, etc.) | Tystnad — OK |
+| Cable to deleted LFO | GAP in evaluateKnob unit | Returns knob.base (graceful) | Tystnad eller defensiv UI |
+| Pace modulated under hw-min | Bounds-clamp covers | clamp till PACE_MIN | Pace clamps visibly |
+| Stop mid-emit (CRITICAL) | GAP-B integration test | Generation invalidates | NO late descriptors |
+| DC-stim phase=0 (CRITICAL) | GAP-A phase-flip test | 2.1A per-channel flip | Biphasic verkar |
+| Two channels same elcon, opposite phase | Existing mock-firmware queue | Sub-queue routing | OK per mock-fw design |
+| SeqNr wraps 256 | Trivial test | mask `& 0xff` | Continous |
+
+**Critical gaps if any:** 0 (alla CRITICAL har tests-on-record GAP-A/GAP-B).
+
+## Worktree parallelization strategy
+
+```
+Lane A (FOUNDATION — blocks all):
+  1. src/synth/types.ts (entities, no logic)
+  2. src/protocol/hardware-bounds.ts + tests
+  3. src/safety/clamp.ts + relocate clampAmp tests
+  4. src/synth/waveforms.ts + tests
+  5. src/synth/lfo.ts + tests
+  6. src/synth/state.ts + tests (pure data + actions)
+  7. src/synth/synth-engine.ts + tests (Clock-interface)
+
+Lane B (parallel after A — UI primitives):
+  Three sub-lanes (truly parallel):
+   B1. src/ui/synth/Knob.svelte + knob-helpers.ts + tests
+   B2. src/ui/synth/MixerChannel.svelte
+   B3. src/ui/synth/LFOModule.svelte
+
+Lane C (after B — cable layer):
+  8. src/ui/synth/cable-helpers.ts + tests
+  9. src/ui/synth/CableLayer.svelte (SVG bezier + drag-cable UX)
+
+Lane D (LAST — composition + integration):
+ 10. src/ui/synth/synth-store.svelte.ts (Svelte adapter)
+ 11. src/ui/Mixer.svelte
+ 12. App.svelte: mutex + Mixer mount
+ 13. test/integration/mixer-flow.test.ts
+ 14. Manual smoke + visual QA
+
+Conflict flags: Lane B sub-lanes touch separate Svelte-filer = inga conflicts.
+                Lane D modifies App.svelte + ev. stores.svelte.ts (mutex-state).
+```
+
+**Parallelization-vinst med 3 worktrees:** Phase 1 (Lane A) sekventiell ~6h.
+Phase 2-3 (B+C) ~3h om paralleller. Phase 4 sekventiell ~3h. **Total: ~10-12h
+CC** (matchar CEO-plan estimat).
 
 ## Spec Review
 
-Skipped — denna plan är detaljerad nog för implementation. /autoplan kan köras
-för full adversarial review om större risk identifieras.
+Skipped — eng-review locks adresserar identifierade risks. /autoplan kan
+köras för adversarial review om större risk uppstår.
 
 ## Next step
 
-`/plan-eng-review` rekommenderas för arkitektur-deepdive innan kod (tick-rate,
-cable-UX, state-management).
+Implementation Phase 1 (Lane A): börja med `src/synth/types.ts` och bygg
+synth-core med tester. Använd `/checkpoint` mid-phase för progress-säkring.
+
+## GSTACK REVIEW REPORT
+
+| Review | Trigger | Why | Runs | Status | Findings |
+|--------|---------|-----|------|--------|----------|
+| CEO Review | `/plan-ceo-review` | Scope & strategy | 1 | CLEAR (PLAN) | 8 proposals, 4 accepted, 4 deferred (SELECTIVE EXPANSION) |
+| Eng Review | `/plan-eng-review` | Architecture & tests (required) | 1 | CLEAR (PLAN) | 13 issues, 0 critical gaps |
+| Design Review | `/plan-design-review` | UI/UX gaps | 0 | — | not run (recommended for Mixer.svelte UX) |
+| Codex Review | `/codex review` | Independent 2nd opinion | 0 | — | not run (skipped per outside-voice ceremony) |
+| DX Review | `/plan-devex-review` | Developer experience gaps | 0 | — | n/a (solo project) |
+
+**UNRESOLVED:** 0  
+**VERDICT:** CEO + ENG CLEARED — ready to implement. Recommend `/plan-design-review` before final UI polish (Mixer.svelte är UX-tung).
