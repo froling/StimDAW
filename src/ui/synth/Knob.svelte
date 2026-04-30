@@ -146,8 +146,8 @@
     </svg>
   </div>
   <span class="knob-readout">
-    <span class="value">{formatted().display}</span>
-    <span class="suffix">{formatted().suffix}</span>
+    <span class="value">{formatted.display}</span>
+    <span class="suffix">{formatted.suffix}</span>
   </span>
 </div>
 
