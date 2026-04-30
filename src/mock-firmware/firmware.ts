@@ -2,6 +2,7 @@ import { encodeFrame, FrameParser } from '../protocol/frame';
 import {
   ATTRIBUTE_ACTION_SIZE,
   AttributeId,
+  Encoding,
   FrameType,
   NST,
   OPCode,
@@ -14,10 +15,17 @@ import {
   encodeUTF8String,
   encodeVoltages,
 } from '../protocol/attributes';
+import {
+  decodeDescriptor,
+  DESCRIPTOR_MAX_SIZE,
+  DescriptorDecodeError,
+  type PtDescriptor,
+} from '../protocol/descriptor';
 import { createLogger } from '../log';
 import { SimClock } from './sim-clock';
 import { VoltageSim } from './voltage-sim';
 import { type FirmwareState, PlayState, createInitialState } from './state';
+import { PtQueue, type QueueFreeSpace, ShortCircuitError } from './pt-queue';
 import type { Transport } from '../transport/transport';
 
 const log = createLogger('mock-fw');
@@ -27,6 +35,20 @@ export interface MockFirmwareOptions {
   voltageEmitIntervalMs?: number;
   /** Auto-start the simulation clock in real-time mode. Default true. */
   realtime?: boolean;
+  /** PT-descriptor dispatcher tick interval in simulated ms. Default 5. */
+  ptDispatcherTickMs?: number;
+}
+
+/**
+ * Tracker-row för dispatched descriptor — används av csv-export (replay test)
+ * och getDispatchedDescriptors() (integrationstester).
+ */
+export interface DispatchedDescriptor {
+  readonly descriptor: PtDescriptor;
+  /** Sim-time vid dispatch i mikrosekunder. */
+  readonly dispatchedAtMicros: number;
+  /** Sub-queue 0 eller 1 (polarity-bit). */
+  readonly queueIdx: 0 | 1;
 }
 
 /**
@@ -47,11 +69,15 @@ export class MockFirmware {
   private voltageSubscribed = false;
   private otherSubscriptions = new Set<number>();
   private opts: Required<MockFirmwareOptions>;
+  private ptQueue = new PtQueue();
+  private dispatched: DispatchedDescriptor[] = [];
+  private ptDispatcherScheduled = false;
 
   constructor(opts: MockFirmwareOptions = {}) {
     this.opts = {
       voltageEmitIntervalMs: opts.voltageEmitIntervalMs ?? 100,
       realtime: opts.realtime ?? true,
+      ptDispatcherTickMs: opts.ptDispatcherTickMs ?? 5,
     };
   }
 
@@ -65,6 +91,7 @@ export class MockFirmware {
     });
     if (this.opts.realtime) this.clock.startRealtime();
     this.scheduleVoltageEmit();
+    this.schedulePtDispatcher();
   }
 
   detach(): void {
@@ -212,6 +239,9 @@ export class MockFirmware {
       } else if (v === 'stop') {
         this.state.playState = PlayState.Stopped;
         this.voltage.setPlaying(false);
+        // STOP per outside-voice #5: dräna queue så pending descriptors inte
+        // dispatchas efter stop. CSV-spår kvar för debug (dispatched-buffer).
+        this.drainPtQueue();
       }
     } else if (attrId === AttributeId.BoxName) {
       const v = decodeUTF8String(data);
@@ -219,7 +249,140 @@ export class MockFirmware {
     } else if (attrId === AttributeId.CurrentPatternName) {
       const v = decodeUTF8String(data);
       if (v !== null) this.state.currentPattern = v;
+    } else if (attrId === AttributeId.PtDescriptorQueue) {
+      this.handlePtDescriptorWrite(data);
     }
+  }
+
+  /**
+   * Dekoda inkommande descriptor-bytes och enqueue:a i sub-queue.
+   * Tysta varningar vid decode-fel eller short-circuit (matchar firmwarebeteende
+   * där PE_NONE-fel tyst loggas och dropas).
+   */
+  private handlePtDescriptorWrite(data: Uint8Array): void {
+    let descriptor: PtDescriptor;
+    try {
+      descriptor = decodeDescriptor(data);
+    } catch (e) {
+      if (e instanceof DescriptorDecodeError) {
+        log.warn('PtDescriptor decode failed:', e.message);
+        return;
+      }
+      throw e;
+    }
+
+    try {
+      const result = this.ptQueue.enqueue(descriptor);
+      if (result.accepted) {
+        log.debug(
+          `PtQueue enqueue seq=${descriptor.sequenceNumber} q${result.queueIdx} (free=${result.freeAfter})`,
+        );
+      } else {
+        log.warn(
+          `PtQueue overflow seq=${descriptor.sequenceNumber} q${result.queueIdx} dropped`,
+        );
+      }
+    } catch (e) {
+      if (e instanceof ShortCircuitError) {
+        log.warn(`PtQueue rejected: ${e.message}`);
+        return;
+      }
+      throw e;
+    }
+    // Notify host om free-space efter enqueue (även vid drop, så host kan re-evaluera).
+    this.notifyPtQueueFreeSpace();
+  }
+
+  /**
+   * Schemalägg dispatcher-tick. Tickar var ptDispatcherTickMs och drar ut alla
+   * descriptors vars startTime ≤ simNow. Real firmware schemalägger varje burst
+   * exakt; mock approximera med en tick-baserad polling-loop som är tillräckligt
+   * fin för test-purposes (5ms granularitet).
+   */
+  private schedulePtDispatcher(): void {
+    if (this.ptDispatcherScheduled) return;
+    this.ptDispatcherScheduled = true;
+    const tick = (): void => {
+      this.ptDispatcherTick();
+      this.clock.scheduleIn(this.opts.ptDispatcherTickMs, tick);
+    };
+    this.clock.scheduleIn(this.opts.ptDispatcherTickMs, tick);
+  }
+
+  /** Single dispatcher pass — drar ut alla "due" descriptors från båda queues. */
+  private ptDispatcherTick(): void {
+    const simNowMicros = this.clock.getTime() * 1000;
+    let didDispatch = false;
+    for (const queueIdx of [0, 1] as const) {
+      while (true) {
+        const peek = this.ptQueue.peek(queueIdx);
+        if (!peek) break;
+        // Real firmware gates on startTimeMicros; mock dispatchar ASAP eftersom
+        // host-side sleeping ger faktisk timing-grindning. Behåll startTime-
+        // gating så framtida replay-test kan validera bursts utan host-throttle.
+        if (peek.startTimeMicros > simNowMicros) break;
+        const d = this.ptQueue.dequeue(queueIdx);
+        if (!d) break;
+        this.dispatched.push({
+          descriptor: d,
+          dispatchedAtMicros: simNowMicros,
+          queueIdx,
+        });
+        didDispatch = true;
+      }
+    }
+    if (didDispatch) this.notifyPtQueueFreeSpace();
+  }
+
+  /**
+   * Encode + emit PtDescriptorQueue free-space notification.
+   * Format matchar firmware sequencer.c:447 — uint16_t[2] LE wrapped i
+   * EE_BYTES_1LEN. Värden = bytes-free per sub-queue (slots × max descriptor size).
+   */
+  private notifyPtQueueFreeSpace(): void {
+    if (!this.transport) return;
+    if (!this.otherSubscriptions.has(AttributeId.PtDescriptorQueue)) return;
+    const free = this.ptQueue.freeSpace();
+    const payload = encodePtQueueFreeSpace(free);
+    const packet = this.buildAttributePacket(
+      0,
+      OPCode.ReportData,
+      AttributeId.PtDescriptorQueue,
+      payload,
+    );
+    void this.transport.write(
+      encodeFrame({
+        serviceType: NST.Datagram,
+        frameType: FrameType.Data,
+        seq: this.nextTxSeq(),
+        payload: packet,
+      }),
+    );
+  }
+
+  /**
+   * Drain queue + notify. Anropas från STOP-flödet och kan triggas externt
+   * via drainPtQueue() public för testbarhet.
+   */
+  drainPtQueue(): number {
+    const dropped = this.ptQueue.drain();
+    this.notifyPtQueueFreeSpace();
+    return dropped;
+  }
+
+  /** Snapshot av dispatched-buffer för CSV-export och tester. */
+  getDispatchedDescriptors(): readonly DispatchedDescriptor[] {
+    return this.dispatched;
+  }
+
+  /** Töm dispatched-buffer (test-helper). */
+  resetDispatched(): void {
+    this.dispatched = [];
+  }
+
+  /** Aktuell free-space per sub-queue (test-helper). */
+  getPtQueueFreeSpace(): QueueFreeSpace {
+    return this.ptQueue.freeSpace();
   }
 
   private sendReportData(transId: number, attrId: number): void {
@@ -251,6 +414,8 @@ export class MockFirmware {
         return encodeUTF8String(this.state.currentPattern);
       case AttributeId.FirmwareVersion:
         return encodeUTF8String(this.state.firmwareVersion);
+      case AttributeId.PtDescriptorQueue:
+        return encodePtQueueFreeSpace(this.ptQueue.freeSpace());
       default:
         return null;
     }
@@ -305,4 +470,40 @@ export class MockFirmware {
     };
     this.clock.scheduleIn(this.opts.voltageEmitIntervalMs, tick);
   }
+}
+
+/**
+ * Encode QueueFreeSpace till wire-format som matchar firmware
+ * sequencer.c:447 — uint16_t[2] LE wrapped i Encoding.Bytes_1Len.
+ *
+ * Layout: [marker=0x10, len=4, q0_lo, q0_hi, q1_lo, q1_hi]
+ * Värden = bytes-free per sub-queue (slots × DESCRIPTOR_MAX_SIZE).
+ *
+ * Standalone så host (NeoDKClient) och tester kan dela samma kodning.
+ */
+export function encodePtQueueFreeSpace(free: QueueFreeSpace): Uint8Array {
+  const q0Bytes = free.q0 * DESCRIPTOR_MAX_SIZE;
+  const q1Bytes = free.q1 * DESCRIPTOR_MAX_SIZE;
+  return new Uint8Array([
+    Encoding.Bytes_1Len,
+    4,
+    q0Bytes & 0xff,
+    (q0Bytes >>> 8) & 0xff,
+    q1Bytes & 0xff,
+    (q1Bytes >>> 8) & 0xff,
+  ]);
+}
+
+/**
+ * Decode wire-format → QueueFreeSpace. Returnerar null vid bad payload.
+ * Används för host-side decoding (NeoDKClient → events) och replay-tester.
+ */
+export function decodePtQueueFreeSpace(payload: Uint8Array): QueueFreeSpace | null {
+  if (payload.length < 6 || payload[0] !== Encoding.Bytes_1Len || payload[1] !== 4) return null;
+  const q0Bytes = payload[2]! | (payload[3]! << 8);
+  const q1Bytes = payload[4]! | (payload[5]! << 8);
+  return {
+    q0: Math.floor(q0Bytes / DESCRIPTOR_MAX_SIZE),
+    q1: Math.floor(q1Bytes / DESCRIPTOR_MAX_SIZE),
+  };
 }
