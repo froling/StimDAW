@@ -128,10 +128,17 @@ test('formatKnobValue: ms format med en decimal', () => {
   expect(formatKnobValue(7_000, 'ms')).toEqual({ display: '7.0', suffix: 'ms' });
 });
 
-test('formatKnobValue: percent från 0..255 → 0..100', () => {
+test('formatKnobValue: percent från 0..255 → 0..100 (amp-byte)', () => {
   expect(formatKnobValue(0, 'percent')).toEqual({ display: '0', suffix: '%' });
   expect(formatKnobValue(128, 'percent')).toEqual({ display: '50', suffix: '%' });
   expect(formatKnobValue(255, 'percent')).toEqual({ display: '100', suffix: '%' });
+});
+
+test('formatKnobValue: fraction från 0..1 → 0..100 (LFO amount, cable depth)', () => {
+  expect(formatKnobValue(0, 'fraction')).toEqual({ display: '0', suffix: '%' });
+  expect(formatKnobValue(0.5, 'fraction')).toEqual({ display: '50', suffix: '%' });
+  expect(formatKnobValue(0.8, 'fraction')).toEqual({ display: '80', suffix: '%' });
+  expect(formatKnobValue(1, 'fraction')).toEqual({ display: '100', suffix: '%' });
 });
 
 test('formatKnobValue: hz format med två decimaler', () => {

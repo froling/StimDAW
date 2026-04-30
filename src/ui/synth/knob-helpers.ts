@@ -94,9 +94,10 @@ export function dragDeltaToValue(
  * Format value för readout. Returns objekt med number + suffix för UI:
  *   pulse_width 144 → { display: '144', unit: 'µs' }
  *   pace 25000 → { display: '25.0', unit: 'ms' }   (för läsbarhet)
- *   amp 128 → { display: '50', unit: '%' }          (mappat till percent)
+ *   amp byte 128 → { display: '50', unit: '%' }     ('percent' = 0..255 → 0..100)
+ *   LFO amount 0.8 → { display: '80', unit: '%' }   ('fraction' = 0..1 → 0..100)
  */
-export type KnobUnit = 'us' | 'ms' | 'percent' | 'hz';
+export type KnobUnit = 'us' | 'ms' | 'percent' | 'fraction' | 'hz';
 
 export function formatKnobValue(
   value: number,
@@ -108,8 +109,11 @@ export function formatKnobValue(
     case 'ms':
       return { display: (value / 1000).toFixed(1), suffix: 'ms' };
     case 'percent':
-      // Antagande: input är 0..255, mappar till 0..100%
+      // Input är 0..255 (amp byte), mappar till 0..100%
       return { display: Math.round((value / 255) * 100).toString(), suffix: '%' };
+    case 'fraction':
+      // Input är 0..1 (LFO amount, cable depth), mappar till 0..100%
+      return { display: Math.round(value * 100).toString(), suffix: '%' };
     case 'hz':
       return { display: value.toFixed(2), suffix: 'Hz' };
   }

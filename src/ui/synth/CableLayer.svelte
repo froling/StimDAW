@@ -154,6 +154,18 @@
     window.addEventListener('keydown', onKey);
   }
 
+  /**
+   * Attacha drag-start-listener på Mixer-containern (inte på SVG-rooten).
+   * SVG har pointer-events: none så events från LFO-port bubblar UPP till
+   * containern, inte ner till SVG. Bug-fix från β.0 first-run.
+   */
+  $effect(() => {
+    if (!containerEl) return;
+    const handler = (e: PointerEvent) => onContainerPointerDown(e);
+    containerEl.addEventListener('pointerdown', handler);
+    return () => containerEl?.removeEventListener('pointerdown', handler);
+  });
+
   // ── Cable-click → delete ───────────────────────────────────────
 
   function onCableClick(cable: Cable, e: MouseEvent): void {
@@ -213,7 +225,6 @@
 <svg
   class="cable-layer"
   xmlns="http://www.w3.org/2000/svg"
-  onpointerdown={onContainerPointerDown}
   role="presentation"
 >
   <!-- Existerande cables -->

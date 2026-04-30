@@ -84,7 +84,7 @@
       value={lfo.amount}
       bounds={AMOUNT_BOUNDS}
       defaultValue={1}
-      unit="percent"
+      unit="fraction"
       label="Amount"
       onChange={(v) => setAmount(Math.max(0, Math.min(1, v)))}
       size={42}
