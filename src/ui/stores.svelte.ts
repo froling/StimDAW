@@ -380,8 +380,6 @@ export async function runPattern(patternName: string): Promise<void> {
   patternRunCancel = cancel;
 
   try {
-    const startMicros = performance.now() * 1000;
-    let descTime = startMicros;
     // Cumulativa state-variabler för descriptor-stream-continuity över
     // loop-iterations: descriptor.startTimeMicros och sequenceNumber måste
     // vara monotont stigande så mock-firmware:s SimClock-scheduling och
@@ -412,19 +410,24 @@ export async function runPattern(patternName: string): Promise<void> {
           cancel.cancelled = true;
           break;
         }
-        // Shadow-render: feed descriptor til local waveform-gen vid sin sim-time
-        waveformGen.enqueueDescriptor(desc, descTime);
+        // Use real wall time (performance.now) för host-side waveform-gen
+        // OCH dispatched-buffer. Tidigare användes en aritmetisk descTime
+        // som drev iväg från real wall clock över tid (browser-sleep har
+        // jitter, sleeps är typ 2ms längre än begärt → drift ackumulerar
+        // över ~14 iterations till > descriptor-duration → waveform-gen
+        // dropar samples direkt eftersom endTime ser ut att ha passerats).
+        const enqueueAtMicros = performance.now() * 1000;
+        waveformGen.enqueueDescriptor(desc, enqueueAtMicros);
         // Track för CSV-export — ringbuffer-cap så långa körningar inte blåser
         // upp minnet. queueIdx härleds från phase-bit (samma som firmware).
         const queueIdx = (desc.phase & 0x01) as 0 | 1;
         const next = app.dispatchedDescriptors.slice();
-        next.push({ descriptor: desc, dispatchedAtMicros: descTime, queueIdx });
+        next.push({ descriptor: desc, dispatchedAtMicros: enqueueAtMicros, queueIdx });
         if (next.length > DISPATCHED_BUFFER_CAP) {
           next.splice(0, next.length - DISPATCHED_BUFFER_CAP);
         }
         app.dispatchedDescriptors = next;
         const durationMicros = desc.nrOfPulses * desc.paceQuarterMs * 250;
-        descTime += durationMicros;
         cumulativeStartTimeMicros = desc.startTimeMicros + durationMicros;
         cumulativeSeqNr = (desc.sequenceNumber + 1) & 0xff;
         // Vänta så pattern playas i realtid (annars firar alla descriptors instant)
