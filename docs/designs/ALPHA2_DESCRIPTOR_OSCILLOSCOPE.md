@@ -257,11 +257,57 @@ Phase 4: UI integration (only after replay-gates green)
 **Pattern porting staging (per outside-voice #9):** Jackhammer (2 elcons, smallest) lands
 + replay-green BEFORE Circle (18 elcons) is started. Failure-isolation.
 
+## Design Review locks (2026-04-30)
+
+**Approved direction:** B-modified, X/Y plot (`approved.html` saved to
+`~/.gstack/projects/froling-StimDAW/designs/oscilloscope-20260430/`).
+
+**Critical reframe from CEO scope:** Oscilloscope-panelen är **pure visualization** —
+INGA controls (pattern selector, run/stop, step counter) i panelen. Styrning sker i
+andra paneler. Per user: "se detta som en modul som vi ska ha i ett helhetsgränssnitt".
+
+**Modul-kontext (helhetsgränssnitt):**
+
+```
+α1 paneler (befintliga): Monitor, IntensitySlider, Cli, ConnectionBanner, StopButton
+α2 panel (ny):           Oscilloscope (denna modul)
+β panel (kommande):      DAW (pattern editor / scene launcher) — höger sida, tar vi sen
+```
+
+**Locked rendering decisions:**
+
+| Aspekt | Val |
+|---|---|
+| Render-typ | X/Y plot, **line-only** (ingen dots — 200+ samples = visual noise) |
+| amp trace | **Step-line** (horizontal + vertical segment) — tekniskt korrekt: amp konstant inom descriptor |
+| Vcap trace | **Smooth line** — kontinuerlig RC-fysik |
+| Iprim trace (future) | Smooth line med pulse-spike-emphasis |
+| Sampling rate | 30ms per sample (~33Hz visualization rate) |
+| Time window | 6s default rolling, 5-10s configurable i settings (annan panel) |
+| Samples per rad | 200 (= 6s × 33Hz) |
+| Newest data | Höger kanten, rullar vänster |
+| Row height | 56px (B-derived spacing) |
+| Hidden row | 24px collapsed greyed strip |
+| Per-row toggle | Eye icon ●/○ klickbar |
+| Trace legend | Klickbar — toggla traces on/off för alla rader |
+| Multi-trace | Flera överlagrade i samma SVG, färgade per metric |
+| Cursor | 1px subtle grå linje, info från extern modul (inte interaktiv) |
+
+**Implementation reference:** Mockupens `<script>`-block är en fungerande renderer
+— samma seedade PRNG + step-line/smooth-line builders kan portas direkt till TS.
+Pure SVG, inga deps. Approved-filen committas till repo som `docs/designs/`.
+
+**Deferred till β** (per approved.json):
+
+- Hover-tooltip för exakt sample-värde
+- Zoom/pan på timeline
+- Trace settings panel (vilka kanaler visar vilka traces)
+- CSV replay-mode (ghost-trace overlay från patterns312)
+
 ## Spec Review
 
-Skipped — α2 är tydligt specificerad ovan + eng-review locks + outside-voice silent-adds.
+Skipped — α2 är tydligt specificerad ovan + eng-review locks + outside-voice silent-adds + design-review locks.
 
 ## Next step
 
-`/plan-design-review` på Oscilloscope + PatternSelector innan implementation, sedan
-`/design-shotgun` för UI-mockup-varianter (per user request).
+Implementation börjar. Inga fler reviews behövs innan kod.
