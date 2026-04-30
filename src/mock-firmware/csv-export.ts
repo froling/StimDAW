@@ -2,9 +2,14 @@
  * CSV-export — DispatchedDescriptor[] → patterns312-CSV-format.
  *
  * Expanderar varje dispatched descriptor till nrOfPulses individuella pulser
- * (en rad per puls). Matchar formatet i reference/NeoDK/patterns312/*.csv så
- * att mock-firmware-output kan jämföras mot riktiga inspelningar (replay-test
- * per outside-voice finding #1, ±50µs / ±5% tolerance bands).
+ * (en rad per puls), formatet återanvänder patterns312-headern så att samma
+ * verktyg/parser kan läsa både inspelningar och mock-output.
+ *
+ * Topologi-not: patterns312/*.csv är ET-312-inspelningar (två oberoende
+ * effektkanaler "A"/"B"). NeoDK är singel transformer + 4-elektrod switch
+ * matrix — ingen channel-motsvarighet. NeoDK-export hardcodar stage='A'.
+ * Strikt byte-replay går inte; jämförelser begränsas till pace/width/phase/
+ * seqNr-timing (outside-voice #1 tolerance bands).
  *
  * Per-pulse-expansion enligt PtDescriptor-spec:
  *   pulse i timestamp = startTimeMicros + Σ(j=0..i-1) (paceQuarterMs*250 + j*deltaPaceMicros)

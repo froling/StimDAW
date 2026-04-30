@@ -5,14 +5,23 @@
  *   "Stage","SeqNr","Timestamp","Phase","Width","Vprim"
  *   "Stage","SeqNr","Timestamp [µs]","Phase","Width [µs]","Vprim [mV]"
  *
- * Inspelningar är inte definitions — varje rad är en uppmätt puls från riktig
- * NeoDK firmware-output. Vi använder dem som golden reference: replay genom
- * mock → assert match inom tolerance bands (±50µs timing, ±5% amplitude per
- * outside-voice finding #1).
+ * VIKTIGT om topologi: patterns312/* är inspelningar från Erostek ET-312,
+ * INTE från NeoDK. ET-312 har två oberoende effektkanaler ("A" och "B"), var
+ * och en med sina egna +/- elektroder (kan dela gemensam minus-pol). NeoDK
+ * har en singel transformer + 4-elektrod switch matrix där varje descriptor
+ * specar pos/neg-mask via electrode_set — inget motsvarande "channel".
+ *
+ * Konsekvens: byte-för-byte replay-jämförelse går INTE. patterns312 är
+ * användbart som referens för pace/width/biphasic-cadence + seqNr-timing
+ * (outside-voice finding #1, ±50µs/±5% tolerance), inte för channel-routing.
+ * NeoDK-output exporteras alltid som stage='A' (singel transformer).
  */
 
 export interface RecordedPulse {
-  /** Sub-queue: 'A' eller 'B' (firmware-internal — fas-mapping) */
+  /**
+   * ET-312-kanal i inspelningar: 'A' eller 'B' = två fysiska effektkanaler.
+   * NeoDK-export använder alltid 'A' eftersom topologi är singel transformer.
+   */
   stage: 'A' | 'B';
   /** Sekvensnummer från firmware */
   seqNr: number;
