@@ -36,7 +36,8 @@ test('dispatchedToPulses: 1-puls descriptor → 1 row', () => {
   const desc = makeDescriptor({ sequenceNumber: 5, startTimeMicros: 1234, phase: 1 });
   const pulses = dispatchedToPulses([makeDispatched(desc)]);
   expect(pulses.length).toBe(1);
-  expect(pulses[0]!.stage).toBe('A');
+  // Stage = polaritets-label från electrodeSet [A=1, B=2] → 'A>B'
+  expect(pulses[0]!.stage).toBe('A>B');
   expect(pulses[0]!.timestampMicros).toBe(1234);
   expect(pulses[0]!.phase).toBe(1);
   expect(pulses[0]!.widthMicros).toBe(100);
@@ -131,49 +132,60 @@ test('exportDispatchedAsCsv: round-trip via parsePatterns312Csv', () => {
   expect(parsed[2]!.timestampMicros).toBe(5200);
 });
 
-test('exportDispatchedAsCsv: tom input → bara header (utan Electrodes)', () => {
+test('exportDispatchedAsCsv: tom input → bara header', () => {
   const csv = exportDispatchedAsCsv([]);
-  // Tom input → ingen Electrodes-kolumn (back-compat header)
   expect(csv).toBe('"Stage","SeqNr","Timestamp [µs]","Phase","Width [µs]","Vprim [mV]"\n');
 });
 
-test('dispatchedToPulses: forward-polaritet → "A>B"', () => {
+test('dispatchedToPulses: ET-312-A-equiv → "A>C" (NeoDK A↔C-paret forward)', () => {
   const desc = makeDescriptor({
-    electrodeSet: [0b0001, 0b0010], // pos=A, neg=B
+    electrodeSet: [0b0001, 0b0100], // pos=A, neg=C
   });
   const pulses = dispatchedToPulses([makeDispatched(desc)]);
-  expect(pulses[0]!.electrodes).toBe('A>B');
+  expect(pulses[0]!.stage).toBe('A>C');
 });
 
-test('dispatchedToPulses: reverse-polaritet → "A<B"', () => {
+test('dispatchedToPulses: reverse → "A<C" (samma paret, omvänd polaritet)', () => {
   const desc = makeDescriptor({
-    electrodeSet: [0b0010, 0b0001], // pos=B, neg=A
+    electrodeSet: [0b0100, 0b0001], // pos=C, neg=A
   });
   const pulses = dispatchedToPulses([makeDispatched(desc)]);
-  expect(pulses[0]!.electrodes).toBe('A<B');
+  expect(pulses[0]!.stage).toBe('A<C');
 });
 
-test('dispatchedToPulses: multi-elektrod AC>BD', () => {
+test('dispatchedToPulses: ET-312-B-equiv → "B>D" (NeoDK B↔D-paret)', () => {
+  const desc = makeDescriptor({
+    electrodeSet: [0b0010, 0b1000], // pos=B, neg=D
+  });
+  const pulses = dispatchedToPulses([makeDispatched(desc)]);
+  expect(pulses[0]!.stage).toBe('B>D');
+});
+
+test('dispatchedToPulses: multi-elektrod → "AC>BD"', () => {
   const desc = makeDescriptor({
     electrodeSet: [0b0101, 0b1010], // pos=AC, neg=BD
   });
   const pulses = dispatchedToPulses([makeDispatched(desc)]);
-  expect(pulses[0]!.electrodes).toBe('AC>BD');
+  expect(pulses[0]!.stage).toBe('AC>BD');
 });
 
-test('dispatchedToPulses: alla pulser i samma descriptor delar electrodes-label', () => {
+test('dispatchedToPulses: alla pulser i samma descriptor delar Stage-label', () => {
   const desc = makeDescriptor({
     nrOfPulses: 4,
     paceQuarterMs: 4,
     electrodeSet: [0b1010, 0b0101], // pos=BD, neg=AC → reverse
   });
   const pulses = dispatchedToPulses([makeDispatched(desc)]);
-  expect(pulses.every((p) => p.electrodes === 'AC<BD')).toBe(true);
+  expect(pulses.every((p) => p.stage === 'AC<BD')).toBe(true);
 });
 
-test('exportDispatchedAsCsv: NeoDK-export inkluderar Electrodes-kolumn', () => {
-  const desc = makeDescriptor({ electrodeSet: [0b0001, 0b0010] });
+test('exportDispatchedAsCsv: NeoDK-format ger 6 kolumner med polaritets-Stage', () => {
+  // Realistiskt: NeoDK-pattern som speglar ET-312 channel-A
+  const desc = makeDescriptor({ electrodeSet: [0b0001, 0b0100] });
   const csv = exportDispatchedAsCsv([makeDispatched(desc)]);
-  expect(csv).toContain('"Electrodes"');
-  expect(csv).toContain(',A>B');
+  expect(csv).not.toContain('"Electrodes"');
+  expect(csv).toContain('A>C,');
+  // Header-rad har exakt 6 kolumner
+  const header = csv.split('\n')[0]!;
+  expect(header.split(',').length).toBe(6);
 });

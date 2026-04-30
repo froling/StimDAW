@@ -8,7 +8,6 @@ import {
 
 const HEADER_NO_UNITS = '"Stage","SeqNr","Timestamp","Phase","Width","Vprim"';
 const HEADER_WITH_UNITS = '"Stage","SeqNr","Timestamp [µs]","Phase","Width [µs]","Vprim [mV]"';
-const HEADER_WITH_ELECTRODES = '"Stage","SeqNr","Timestamp [µs]","Phase","Width [µs]","Vprim [mV]","Electrodes"';
 
 test('parse: tom string returnerar tom lista', () => {
   expect(parsePatterns312Csv('')).toEqual([]);
@@ -125,69 +124,61 @@ test('parse: golden — riktig Toggle.csv-rad parsas exakt', () => {
   });
 });
 
-test('parse: header med Electrodes-kolumn accepteras (NeoDK-format)', () => {
-  const csv = `${HEADER_WITH_ELECTRODES}\nA,1,1000,0,144,2400,A>B`;
+test('parse: NeoDK polaritets-label i Stage-fältet (forward)', () => {
+  const csv = `${HEADER_WITH_UNITS}\nA>C,1,1000,0,144,2400`;
   const result = parsePatterns312Csv(csv);
   expect(result.length).toBe(1);
   expect(result[0]).toEqual({
-    stage: 'A',
+    stage: 'A>C',
     seqNr: 1,
     timestampMicros: 1000,
     phase: 0,
     widthMicros: 144,
     vprimMv: 2400,
-    electrodes: 'A>B',
   });
 });
 
-test('parse: ET-312-format (utan Electrodes) ger ingen electrodes-fält', () => {
-  // Back-compat: gamla recordings ska inte fabricera electrodes ur tomma luften
-  const csv = `${HEADER_WITH_UNITS}\nA,1,1000,0,144,2400`;
+test('parse: NeoDK polaritets-label (reverse + multi-elektrod)', () => {
+  const csv = [
+    HEADER_WITH_UNITS,
+    'A<C,1,1000,1,144,2400',
+    'AC>BD,2,1130,0,143,2030',
+    'AC<BD,3,1260,1,145,2300',
+  ].join('\n');
   const result = parsePatterns312Csv(csv);
-  expect(result[0]?.electrodes).toBeUndefined();
+  expect(result.map((p) => p.stage)).toEqual(['A<C', 'AC>BD', 'AC<BD']);
 });
 
-test('parse: rad utan Electrodes-fält i electrodes-header → throws', () => {
-  // Header lovar 7 kolumner, rad har bara 6 → fail
-  const csv = `${HEADER_WITH_ELECTRODES}\nA,1,1000,0,144,2400`;
-  expect(() => parsePatterns312Csv(csv)).toThrow(CsvParseError);
+test('parse: ogiltig stage-format throws', () => {
+  // Ogiltigt: stage får inte innehålla siffror eller mellanslag (förutom 0>0-sentinel)
+  expect(() => parsePatterns312Csv(`${HEADER_WITH_UNITS}\nA1,1,1000,0,144,2400`)).toThrow(CsvParseError);
+  expect(() => parsePatterns312Csv(`${HEADER_WITH_UNITS}\nE,1,1000,0,144,2400`)).toThrow(CsvParseError); // ej A-D
+  expect(() => parsePatterns312Csv(`${HEADER_WITH_UNITS}\nA>>B,1,1000,0,144,2400`)).toThrow(CsvParseError);
 });
 
-test('serialize: pulser med electrodes-fält → header får Electrodes-kolumn', () => {
+test('parse: 0>0-sentinel accepteras (debug edge case)', () => {
+  const csv = `${HEADER_WITH_UNITS}\n0>0,1,1000,0,144,2400`;
+  const result = parsePatterns312Csv(csv);
+  expect(result[0]?.stage).toBe('0>0');
+});
+
+test('serialize → parse round-trip med polaritets-labels i Stage', () => {
   const pulses: RecordedPulse[] = [
-    { stage: 'A', seqNr: 1, timestampMicros: 1000, phase: 0, widthMicros: 144, vprimMv: 2400, electrodes: 'A>B' },
+    { stage: 'A>C', seqNr: 1, timestampMicros: 1000, phase: 0, widthMicros: 144, vprimMv: 2400 },
+    { stage: 'A<C', seqNr: 2, timestampMicros: 2000, phase: 1, widthMicros: 143, vprimMv: 2030 },
+    { stage: 'AC>BD', seqNr: 3, timestampMicros: 3000, phase: 0, widthMicros: 145, vprimMv: 2200 },
   ];
   const csv = serializePatterns312Csv(pulses);
-  expect(csv).toContain('"Electrodes"');
-  expect(csv).toContain('A,1,1000,0,144,2400,A>B');
-});
-
-test('serialize: pulser utan electrodes → backwards-compat header utan kolumn', () => {
-  const pulses: RecordedPulse[] = [
-    { stage: 'A', seqNr: 1, timestampMicros: 1000, phase: 0, widthMicros: 144, vprimMv: 2400 },
-  ];
-  const csv = serializePatterns312Csv(pulses);
-  expect(csv).not.toContain('"Electrodes"');
-  expect(csv).toContain('A,1,1000,0,144,2400');
-});
-
-test('serialize: blandad input — alla rader får Electrodes-kolumn (saknat → tom)', () => {
-  const pulses: RecordedPulse[] = [
-    { stage: 'A', seqNr: 1, timestampMicros: 1000, phase: 0, widthMicros: 144, vprimMv: 2400, electrodes: 'A>B' },
-    { stage: 'A', seqNr: 2, timestampMicros: 2000, phase: 1, widthMicros: 143, vprimMv: 2030 },
-  ];
-  const csv = serializePatterns312Csv(pulses);
-  expect(csv).toContain('A,1,1000,0,144,2400,A>B');
-  expect(csv).toContain('A,2,2000,1,143,2030,'); // tom electrodes-fält efter sista komma
-});
-
-test('serialize → parse round-trip med electrodes', () => {
-  const pulses: RecordedPulse[] = [
-    { stage: 'A', seqNr: 1, timestampMicros: 1000, phase: 0, widthMicros: 144, vprimMv: 2400, electrodes: 'A>B' },
-    { stage: 'A', seqNr: 2, timestampMicros: 2000, phase: 1, widthMicros: 143, vprimMv: 2030, electrodes: 'A<B' },
-    { stage: 'A', seqNr: 3, timestampMicros: 3000, phase: 0, widthMicros: 145, vprimMv: 2200, electrodes: 'AC>BD' },
-  ];
-  const csv = serializePatterns312Csv(pulses);
+  // Sex kolumner — ingen Electrodes-kolumn
+  expect(csv.split('\n')[0]).toBe('"Stage","SeqNr","Timestamp [µs]","Phase","Width [µs]","Vprim [mV]"');
   const parsed = parsePatterns312Csv(csv);
   expect(parsed).toEqual(pulses);
+});
+
+test('serialize: rad-format matchar exakt patterns312-syntax', () => {
+  const pulses: RecordedPulse[] = [
+    { stage: 'A>C', seqNr: 0, timestampMicros: 5000, phase: 0, widthMicros: 144, vprimMv: 3000 },
+  ];
+  const csv = serializePatterns312Csv(pulses);
+  expect(csv).toContain('A>C,0,5000,0,144,3000');
 });
