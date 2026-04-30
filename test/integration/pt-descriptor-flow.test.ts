@@ -337,6 +337,105 @@ test('descriptor flow: PlayPauseStop "stop" drains queue automatically', async (
   fw.detach();
 });
 
+test('descriptor flow: STOP-during-stuck-queue (outside-voice #5)', async () => {
+  // Kritisk safety-test: queue stuck (full pga overflow) + STOP. Verifiera:
+  //   1. STOP dränerar queue till 100% free
+  //   2. INGEN pending dispatch fires efter STOP (även när klockan advance:ar
+  //      förbi alla schemalagda startTimes)
+  // Detta är test-spec:en från outside-voice finding #5 (α2 design-doc).
+  const { client: clientTransport, firmware: fwTransport } = createInMemoryPair();
+  const fw = new MockFirmware({ realtime: false });
+  fw.attach(fwTransport);
+  await fwTransport.open();
+
+  const client = new NeoDKClient(clientTransport);
+  await client.connect();
+  await flush();
+
+  // Pumpa in 25 descriptors → q0 (cap 20) overflow:ar med 5 dropade
+  // startTime långt i framtiden så ingen dispatchas innan STOP
+  for (let i = 0; i < 25; i++) {
+    await client.writePtDescriptor(
+      makeDescriptor({
+        sequenceNumber: i,
+        phase: 0,
+        startTimeMicros: 5_000_000 + i * 1_000, // 5s+ i framtiden
+      }),
+    );
+  }
+  await flush();
+
+  // Pre-STOP: queue stuck (full)
+  expect(fw.getPtQueueFreeSpace().q0).toBe(0);
+  expect(fw.getDispatchedDescriptors().length).toBe(0);
+
+  // STOP via PlayPauseStop "stop" — drainar queue + bumpar generation
+  await client.writePlayState('stop');
+  await flush();
+
+  // Queue dränerad omedelbart
+  expect(fw.getPtQueueFreeSpace()).toEqual({
+    q0: SLOTS_PER_QUEUE,
+    q1: SLOTS_PER_QUEUE,
+  });
+
+  // Avancera klockan rejält förbi alla startTimes (10s)
+  // Pending events fire:ar men generation-mismatch → no-op
+  fw.getClock().advance(10_000);
+  await flush();
+
+  // Kritiskt: INGEN dispatch efter STOP
+  expect(fw.getDispatchedDescriptors().length).toBe(0);
+
+  await client.disconnect();
+  fw.detach();
+});
+
+test('descriptor flow: STOP mid-flight stoppar resterande dispatches', async () => {
+  // Kompletterande till outside-voice #5: när vissa redan dispatched + STOP +
+  // resterande får INTE dispatchas.
+  const { client: clientTransport, firmware: fwTransport } = createInMemoryPair();
+  const fw = new MockFirmware({ realtime: false });
+  fw.attach(fwTransport);
+  await fwTransport.open();
+
+  const client = new NeoDKClient(clientTransport);
+  await client.connect();
+  await flush();
+
+  // 10 descriptors spridda 0, 100ms, 200ms, ..., 900ms
+  for (let i = 0; i < 10; i++) {
+    await client.writePtDescriptor(
+      makeDescriptor({
+        sequenceNumber: i,
+        startTimeMicros: i * 100_000,
+      }),
+    );
+  }
+  await flush();
+
+  // Avancera till mitten — 5 ska ha dispatchats (startTime 0, 100, 200, 300, 400ms)
+  fw.getClock().advance(450);
+  await flush();
+  const halfwayCount = fw.getDispatchedDescriptors().length;
+  expect(halfwayCount).toBeGreaterThan(0);
+  expect(halfwayCount).toBeLessThan(10);
+
+  // STOP — drainar resterande, invaliderar pending events
+  await client.writePlayState('stop');
+  await flush();
+
+  // Avancera förbi alla startTimes
+  fw.getClock().advance(1_000);
+  await flush();
+
+  // Dispatched-count oförändrad efter STOP — resten droppade
+  expect(fw.getDispatchedDescriptors().length).toBe(halfwayCount);
+
+  await client.disconnect();
+  fw.detach();
+});
+
 test('encodePtQueueFreeSpace round-trips via decodePtQueueFreeSpace', () => {
   const cases = [
     { q0: 20, q1: 20 },
