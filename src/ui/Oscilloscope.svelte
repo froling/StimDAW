@@ -7,38 +7,61 @@
   const VIEW_W = 100;
   const VIEW_H = 40;
   const Y_PAD = 2;
+  const WINDOW_MICROS = 6_000_000; // 6s rolling window per design lock
 
   /**
-   * Step-line path för amp (horisontella + vertikala segment).
-   * Per design-review lock: amp är konstant inom descriptor — step-line teknisk korrekt.
+   * Tid → x-koordinat. Senaste sample (timestamp == nowMicros) hamnar vid x=100,
+   * äldre samples flyttas vänster. Samples äldre än window-start klipps bort.
    */
-  function buildAmpPath(samples: WaveformSample[]): string {
-    if (samples.length < 1) return '';
-    const xStep = VIEW_W / Math.max(1, samples.length - 1);
+  function timeToX(timestampMicros: number, nowMicros: number): number {
+    return (VIEW_W * (timestampMicros - (nowMicros - WINDOW_MICROS))) / WINDOW_MICROS;
+  }
+
+  /** Filtrera samples till de som är inom det rolling window. */
+  function withinWindow(samples: WaveformSample[], nowMicros: number): WaveformSample[] {
+    const start = nowMicros - WINDOW_MICROS;
+    // Optimization: samples är monotont stigande timestamps, så vi kan bara
+    // skipa from början tills vi hittar första som är ≥ start
+    let firstIdx = 0;
+    while (firstIdx < samples.length && samples[firstIdx]!.timestampMicros < start) firstIdx++;
+    return firstIdx === 0 ? samples : samples.slice(firstIdx);
+  }
+
+  /**
+   * Step-line path för amp. Tids-baserad x-positionering så grafen rullar:
+   * senaste sample vid x=100, äldre glider ut vänster.
+   */
+  function buildAmpPath(samples: WaveformSample[], nowMicros: number): string {
+    const visible = withinWindow(samples, nowMicros);
+    if (visible.length === 0) return '';
     const valueToY = (v: number): number => VIEW_H - Y_PAD - (v / 255) * (VIEW_H - 2 * Y_PAD);
-    let prevY = valueToY(samples[0]!.amp);
-    let d = `M0,${prevY.toFixed(2)}`;
-    for (let i = 1; i < samples.length; i++) {
-      const x = (i * xStep).toFixed(2);
-      const y = valueToY(samples[i]!.amp);
+    let prevX = timeToX(visible[0]!.timestampMicros, nowMicros);
+    let prevY = valueToY(visible[0]!.amp);
+    let d = `M${prevX.toFixed(2)},${prevY.toFixed(2)}`;
+    for (let i = 1; i < visible.length; i++) {
+      const x = timeToX(visible[i]!.timestampMicros, nowMicros);
+      const y = valueToY(visible[i]!.amp);
       if (Math.abs(y - prevY) > 0.05) {
-        d += ` L${x},${prevY.toFixed(2)} L${x},${y.toFixed(2)}`;
+        d += ` L${x.toFixed(2)},${prevY.toFixed(2)} L${x.toFixed(2)},${y.toFixed(2)}`;
       } else {
-        d += ` L${x},${y.toFixed(2)}`;
+        d += ` L${x.toFixed(2)},${y.toFixed(2)}`;
       }
       prevY = y;
     }
     return d;
   }
 
-  /** Smooth path för Vcap (kontinuerlig RC-kurva, normaliserad mot 80V max). */
-  function buildVcapPath(samples: WaveformSample[]): string {
-    if (samples.length < 1) return '';
-    const xStep = VIEW_W / Math.max(1, samples.length - 1);
+  /** Smooth path för Vcap, samma rolling x-positionering. */
+  function buildVcapPath(samples: WaveformSample[], nowMicros: number): string {
+    const visible = withinWindow(samples, nowMicros);
+    if (visible.length === 0) return '';
     const VCAP_MAX = 80_000;
     const valueToY = (v: number): number => VIEW_H - Y_PAD - (v / VCAP_MAX) * (VIEW_H - 2 * Y_PAD);
-    return samples
-      .map((s, i) => `${i === 0 ? 'M' : 'L'}${(i * xStep).toFixed(2)},${valueToY(s.vcap).toFixed(2)}`)
+    return visible
+      .map(
+        (s, i) =>
+          `${i === 0 ? 'M' : 'L'}${timeToX(s.timestampMicros, nowMicros).toFixed(2)},${valueToY(s.vcap).toFixed(2)}`,
+      )
       .join(' ');
   }
 
@@ -152,10 +175,10 @@
                 <line class="grid-line" x1="0" y1="10" x2="100" y2="10" />
                 <line class="grid-line" x1="0" y1="30" x2="100" y2="30" />
                 {#if vcapActive && row.samples.length > 1}
-                  <path class="trace-vcap" d={buildVcapPath(row.samples)} />
+                  <path class="trace-vcap" d={buildVcapPath(row.samples, app.waveformNowMicros)} />
                 {/if}
                 {#if ampActive && row.samples.length > 0}
-                  <path class="trace-amp" d={buildAmpPath(row.samples)} />
+                  <path class="trace-amp" d={buildAmpPath(row.samples, app.waveformNowMicros)} />
                 {/if}
               </svg>
             </div>

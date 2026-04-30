@@ -54,6 +54,8 @@ class AppState {
   isRunningPattern = $state<boolean>(false);
   /** Per-elconId ringbuffer av samples (för Oscilloscope render). */
   waveformBuffers = $state<Map<string, WaveformSample[]>>(new Map());
+  /** Aktuellt sim-time µs — driver rolling x-axis, ticks vid 30Hz. */
+  waveformNowMicros = $state<number>(0);
   /** Vilka elcons som ska visas i oscilloscope (eye toggle). */
   visibleElcons = $state<Set<string>>(new Set());
   /** Vilka traces som ritas (amp alltid på, vcap optional, etc.). */
@@ -275,6 +277,10 @@ function startWaveformLoop(): void {
   waveformLoopHandle = setInterval(() => {
     if (!waveformGen) return;
     const nowMicros = performance.now() * 1000;
+    // Update reactive "now" så Oscilloscope kan rolla X-axeln även när
+    // inga active descriptors finns (samples-array kan vara tom).
+    app.waveformNowMicros = nowMicros;
+
     const rampPercent = ramp?.snapshot(performance.now()).effective ?? 0;
     const ceilingPercent = ceiling?.get() ?? app.ceiling;
     const samples = waveformGen.sample(nowMicros, { rampPercent, ceilingPercent });
