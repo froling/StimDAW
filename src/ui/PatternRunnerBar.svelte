@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { app, runPattern, stopPattern } from './stores.svelte';
+  import { app, runPattern, stopPattern, exportDispatchedCsv } from './stores.svelte';
   import { builtinPatterns } from '../patterns/builtins';
 
   // Temp control panel — DAW kommer ersätta detta i β.
@@ -36,6 +36,18 @@
     {/each}
     <button
       type="button"
+      class="export-btn"
+      onclick={exportDispatchedCsv}
+      disabled={app.dispatchedDescriptors.length === 0}
+      title="Export dispatched descriptors as patterns312-CSV"
+    >
+      Export CSV
+      {#if app.dispatchedDescriptors.length > 0}
+        <span class="export-count">({app.dispatchedDescriptors.length})</span>
+      {/if}
+    </button>
+    <button
+      type="button"
       class="stop-btn"
       onclick={stopPattern}
       disabled={!app.isRunningPattern}
@@ -46,6 +58,7 @@
 
   <p class="footnote">
     Temp panel — DAW (β) kommer ersätta. Patterns kappas till 5 reps i α2 för dev-tempo.
+    CSV-export = host-sanning (vad runner skickade), inte firmware-sidans dispatch.
   </p>
 </section>
 
@@ -131,7 +144,6 @@
     cursor: pointer;
     font-size: 0.85rem;
     font-weight: 600;
-    margin-left: auto;
   }
   .stop-btn:hover:not(:disabled) {
     background: #cc0033;
@@ -140,6 +152,31 @@
   .stop-btn:disabled {
     opacity: 0.3;
     cursor: not-allowed;
+  }
+  .export-btn {
+    padding: 0.4rem 0.85rem;
+    border: 1px solid #d0d0d0;
+    background: white;
+    color: #555;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 0.85rem;
+    font-family: system-ui, sans-serif;
+    margin-left: auto;
+  }
+  .export-btn:hover:not(:disabled) {
+    border-color: #0066cc;
+    color: #0066cc;
+  }
+  .export-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+  .export-count {
+    color: #888;
+    font-family: ui-monospace, monospace;
+    font-size: 0.78rem;
+    margin-left: 0.2rem;
   }
 
   .footnote {

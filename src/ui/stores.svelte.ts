@@ -1,6 +1,6 @@
 import { NeoDKClient, type PlayStateLabel } from '../protocol/neodk-client';
 import { createInMemoryPair } from '../transport/in-memory';
-import { MockFirmware } from '../mock-firmware/firmware';
+import { MockFirmware, type DispatchedDescriptor } from '../mock-firmware/firmware';
 import { RampController } from '../safety/ramp-controller';
 import { MaxCeiling } from '../safety/max-ceiling';
 import { StopWatchdog } from '../safety/stop-watchdog';
@@ -12,6 +12,8 @@ import { generatePatternDescriptors } from '../patterns/runner';
 import { getPatternByName } from '../patterns/builtins';
 import { type PatternDef, elconId, uniqueElcons } from '../patterns/types';
 import { WaveformGenerator, type WaveformSample } from '../mock-firmware/waveform';
+import { exportDispatchedAsCsv } from '../mock-firmware/csv-export';
+import { buildCsvFilename } from './csv-filename';
 
 const log = createLogger('ui-store');
 
@@ -60,7 +62,20 @@ class AppState {
   visibleElcons = $state<Set<string>>(new Set());
   /** Vilka traces som ritas (amp alltid på, vcap optional, etc.). */
   activeTraces = $state<Set<'amp' | 'vcap'>>(new Set(['amp']));
+  /**
+   * Host-sidans dispatched-buffer: vad pattern-runnern faktiskt skickade
+   * via writePtDescriptor + förväntad sim-tid (descTime). Capped så vi
+   * inte blåser upp minnet under långa körningar. Driver CSV-export.
+   *
+   * OBS: detta är host-sanning (vad host trodde sig skicka), inte
+   * firmware-sanning. För mock-läge exponerar MockFirmware.getDispatched-
+   * Descriptors() firmware-sidans truth (post-decode, post-enqueue).
+   */
+  dispatchedDescriptors = $state<DispatchedDescriptor[]>([]);
 }
+
+/** Cap så att en tre-timmars patternrun inte sväller minnet — räcker för dev. */
+const DISPATCHED_BUFFER_CAP = 5000;
 
 export const app = new AppState();
 
@@ -345,10 +360,11 @@ export async function runPattern(patternName: string): Promise<void> {
   }
   app.visibleElcons = visibleSet;
 
-  // Reset waveform-gen för clean run
+  // Reset waveform-gen + dispatched-buffer för clean run
   if (!waveformGen) waveformGen = new WaveformGenerator();
   waveformGen.reset();
   app.waveformBuffers = new Map();
+  app.dispatchedDescriptors = [];
   startWaveformLoop();
 
   const cancel = { cancelled: false };
@@ -370,6 +386,15 @@ export async function runPattern(patternName: string): Promise<void> {
       }
       // Shadow-render: feed descriptor til local waveform-gen vid sin sim-time
       waveformGen.enqueueDescriptor(desc, descTime);
+      // Track för CSV-export — ringbuffer-cap så långa körningar inte blåser
+      // upp minnet. queueIdx härleds från phase-bit (samma som firmware).
+      const queueIdx = (desc.phase & 0x01) as 0 | 1;
+      const next = app.dispatchedDescriptors.slice();
+      next.push({ descriptor: desc, dispatchedAtMicros: descTime, queueIdx });
+      if (next.length > DISPATCHED_BUFFER_CAP) {
+        next.splice(0, next.length - DISPATCHED_BUFFER_CAP);
+      }
+      app.dispatchedDescriptors = next;
       const durationMicros = desc.nrOfPulses * desc.paceQuarterMs * 250;
       descTime += durationMicros;
       // Vänta så pattern playas i realtid (annars firar alla descriptors instant)
@@ -406,6 +431,51 @@ export function toggleTrace(trace: 'amp' | 'vcap'): void {
   if (next.has(trace)) next.delete(trace);
   else next.add(trace);
   app.activeTraces = next;
+}
+
+// Re-export så UI kan importera från en plats; pure-helper bor i csv-filename.ts
+// för att undvika Svelte 5 $state-runtime i tester.
+export { buildCsvFilename };
+
+/**
+ * Bygg CSV-payload för aktuell dispatched-buffer + förslag på filnamn.
+ * Separerad från download-trigger så att action:en är testbar utan DOM.
+ *
+ * Returnerar null om buffern är tom — UI ska disable knappen då.
+ */
+export function buildDispatchedCsv(now: Date = new Date()): { filename: string; csv: string } | null {
+  if (app.dispatchedDescriptors.length === 0) return null;
+  const csv = exportDispatchedAsCsv(app.dispatchedDescriptors);
+  return {
+    filename: buildCsvFilename(app.currentPattern?.name, now),
+    csv,
+  };
+}
+
+/**
+ * UI-action: triggar nedladdning av CSV via temporär anchor.
+ * No-op om dispatched-buffern är tom.
+ */
+export function exportDispatchedCsv(): void {
+  const built = buildDispatchedCsv();
+  if (!built) {
+    pushDebugLog({ ts: Date.now(), direction: 'system', text: 'Export CSV: empty buffer' });
+    return;
+  }
+  const blob = new Blob([built.csv], { type: 'text/csv;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = built.filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+  pushDebugLog({
+    ts: Date.now(),
+    direction: 'system',
+    text: `Export CSV: ${built.filename} (${app.dispatchedDescriptors.length} descriptors)`,
+  });
 }
 
 function sleep(ms: number): Promise<void> {
