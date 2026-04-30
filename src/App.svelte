@@ -6,6 +6,8 @@
   import Monitor from './ui/Monitor.svelte';
   import IntensitySlider from './ui/IntensitySlider.svelte';
   import Cli from './ui/Cli.svelte';
+  import PatternRunnerBar from './ui/PatternRunnerBar.svelte';
+  import Oscilloscope from './ui/Oscilloscope.svelte';
   import { createLogger } from './log';
 
   const log = createLogger('app');
@@ -30,6 +32,12 @@
   <div class="grid">
     <Monitor />
     <IntensitySlider />
+    <div class="col-span-2">
+      <PatternRunnerBar />
+    </div>
+    <div class="col-span-2">
+      <Oscilloscope />
+    </div>
     <div class="col-span-2">
       <Cli />
     </div>
@@ -73,7 +81,7 @@
     font-size: 0.85rem;
   }
   main {
-    max-width: 960px;
+    max-width: 1100px;
     margin: 0 auto;
     padding: 1.25rem;
     display: flex;

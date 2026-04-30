@@ -17,6 +17,7 @@ import {
   type Voltages,
 } from './attributes';
 import { encodeDebugCommand } from './debug-cli';
+import { encodeDescriptor, type PtDescriptor } from './descriptor';
 import { TypedEventEmitter } from './typed-emitter';
 import { createLogger } from '../log';
 import type { Transport } from '../transport/transport';
@@ -96,6 +97,16 @@ export class NeoDKClient extends TypedEventEmitter<NeoDKClientEvents> {
 
   async writePlayState(state: 'play' | 'pause' | 'stop'): Promise<void> {
     await this.sendDatagram(OPCode.WriteRequest, AttributeId.PlayPauseStop, encodeUTF8String(state));
+  }
+
+  /**
+   * Write a single PT-descriptor to AI_PT_DESCRIPTOR_QUEUE.
+   * Encoder hanterar omittnings-rules och short-circuit-validation.
+   * Per α2-design: descriptors strömas en åt gången från host pattern-runner.
+   */
+  async writePtDescriptor(descriptor: PtDescriptor): Promise<void> {
+    const bytes = encodeDescriptor(descriptor);
+    await this.sendDatagram(OPCode.WriteRequest, AttributeId.PtDescriptorQueue, bytes);
   }
 
   async subscribe(id: AttributeId): Promise<void> {

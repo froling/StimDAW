@@ -8,12 +8,18 @@ import { AttributeId } from '../protocol/opcodes';
 import type { Voltages } from '../protocol/attributes';
 import { loadSettings, saveSettings } from '../fileformat/io';
 import { createLogger } from '../log';
+import { generatePatternDescriptors } from '../patterns/runner';
+import { getPatternByName } from '../patterns/builtins';
+import { type PatternDef, elconId, uniqueElcons } from '../patterns/types';
+import { WaveformGenerator, type WaveformSample } from '../mock-firmware/waveform';
 
 const log = createLogger('ui-store');
 
 const VOLTAGE_RING_SIZE = 600;
 const DEBUG_LOG_SIZE = 100;
 const RAMP_TICK_MS = 100;
+const WAVEFORM_TICK_MS = 30; // 30ms per design-review lock
+const WAVEFORM_RING_SIZE = 200; // 6s @ 30ms — matchar approved.html
 
 export type ConnectionState = 'disconnected' | 'connecting' | 'connected' | 'ramping';
 
@@ -41,6 +47,17 @@ class AppState {
   rampInfo = $state<{ ramping: boolean; effective: number }>({ ramping: false, effective: 0 });
   debugLog = $state<DebugLogEntry[]>([]);
   lastError = $state<string | null>(null);
+
+  // ── α2 — pattern + oscilloscope state ──────────────────────────────────
+  /** Aktivt pattern (null = idle). */
+  currentPattern = $state<PatternDef | null>(null);
+  isRunningPattern = $state<boolean>(false);
+  /** Per-elconId ringbuffer av samples (för Oscilloscope render). */
+  waveformBuffers = $state<Map<string, WaveformSample[]>>(new Map());
+  /** Vilka elcons som ska visas i oscilloscope (eye toggle). */
+  visibleElcons = $state<Set<string>>(new Set());
+  /** Vilka traces som ritas (amp alltid på, vcap optional, etc.). */
+  activeTraces = $state<Set<'amp' | 'vcap'>>(new Set(['amp']));
 }
 
 export const app = new AppState();
@@ -173,6 +190,8 @@ function stopRampLoop(): void {
 
 export async function disconnect(): Promise<void> {
   stopRampLoop();
+  stopWaveformLoop();
+  if (patternRunCancel) patternRunCancel.cancelled = true;
   await client?.disconnect();
   mockFw?.detach();
   client = null;
@@ -240,4 +259,149 @@ export async function reconnectMock(): Promise<void> {
   }
   pushDebugLog({ ts: Date.now(), direction: 'system', text: 'Reconnecting…' });
   await client.connect();
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// α2 — Pattern runner + waveform shadow render
+// ──────────────────────────────────────────────────────────────────────────
+
+let waveformGen: WaveformGenerator | null = null;
+let waveformLoopHandle: ReturnType<typeof setInterval> | null = null;
+let patternRunCancel: { cancelled: boolean } | null = null;
+
+function startWaveformLoop(): void {
+  if (waveformLoopHandle !== null) return;
+  if (!waveformGen) waveformGen = new WaveformGenerator();
+  waveformLoopHandle = setInterval(() => {
+    if (!waveformGen) return;
+    const nowMicros = performance.now() * 1000;
+    const rampPercent = ramp?.snapshot(performance.now()).effective ?? 0;
+    const ceilingPercent = ceiling?.get() ?? app.ceiling;
+    const samples = waveformGen.sample(nowMicros, { rampPercent, ceilingPercent });
+
+    if (samples.length === 0) return;
+
+    // Push samples till ringbuffer per elcon — Map mutation
+    const next = new Map(app.waveformBuffers);
+    for (const sample of samples) {
+      let buf = next.get(sample.elconId);
+      if (!buf) {
+        buf = [];
+      } else {
+        buf = buf.slice(); // copy för immutability
+      }
+      buf.push(sample);
+      if (buf.length > WAVEFORM_RING_SIZE) buf.shift();
+      next.set(sample.elconId, buf);
+    }
+    app.waveformBuffers = next;
+  }, WAVEFORM_TICK_MS);
+}
+
+function stopWaveformLoop(): void {
+  if (waveformLoopHandle !== null) {
+    clearInterval(waveformLoopHandle);
+    waveformLoopHandle = null;
+  }
+}
+
+/**
+ * Run named pattern. Genererar descriptors host-side, skickar via NeoDKClient,
+ * shadow-renderar lokalt i WaveformGenerator för Oscilloscope.
+ */
+export async function runPattern(patternName: string): Promise<void> {
+  if (!client) {
+    pushDebugLog({ ts: Date.now(), direction: 'system', text: 'Cannot run pattern: not connected' });
+    return;
+  }
+  if (app.isRunningPattern) {
+    pushDebugLog({ ts: Date.now(), direction: 'system', text: 'Pattern already running' });
+    return;
+  }
+  const pattern = getPatternByName(patternName);
+  if (!pattern) {
+    pushDebugLog({ ts: Date.now(), direction: 'system', text: `Unknown pattern: ${patternName}` });
+    return;
+  }
+
+  app.currentPattern = pattern;
+  app.isRunningPattern = true;
+  pushDebugLog({
+    ts: Date.now(),
+    direction: 'system',
+    text: `Run pattern "${pattern.name}" (${pattern.elcons.length} elcons, ${pattern.nrOfReps} reps)`,
+  });
+
+  // Auto-show alla unika elcons i pattern
+  const visibleSet = new Set<string>();
+  for (const elcon of uniqueElcons(pattern.elcons)) {
+    visibleSet.add(elconId(elcon));
+  }
+  app.visibleElcons = visibleSet;
+
+  // Reset waveform-gen för clean run
+  if (!waveformGen) waveformGen = new WaveformGenerator();
+  waveformGen.reset();
+  app.waveformBuffers = new Map();
+  startWaveformLoop();
+
+  const cancel = { cancelled: false };
+  patternRunCancel = cancel;
+
+  try {
+    // Cap reps i α2 så vi inte spinner i 15 minuter på Toggle 300×
+    const maxReps = Math.min(5, pattern.nrOfReps);
+    const startMicros = performance.now() * 1000;
+    let descTime = startMicros;
+
+    for (const desc of generatePatternDescriptors(pattern, { maxReps })) {
+      if (cancel.cancelled) break;
+      try {
+        await client.writePtDescriptor(desc);
+      } catch (e) {
+        log.warn('writePtDescriptor failed:', e);
+        break;
+      }
+      // Shadow-render: feed descriptor til local waveform-gen vid sin sim-time
+      waveformGen.enqueueDescriptor(desc, descTime);
+      const durationMicros = desc.nrOfPulses * desc.paceQuarterMs * 250;
+      descTime += durationMicros;
+      // Vänta så pattern playas i realtid (annars firar alla descriptors instant)
+      await sleep(durationMicros / 1000);
+    }
+  } finally {
+    if (patternRunCancel === cancel) patternRunCancel = null;
+    app.isRunningPattern = false;
+    pushDebugLog({ ts: Date.now(), direction: 'system', text: `Pattern "${pattern.name}" finished` });
+  }
+}
+
+/** Stop currently-running pattern. Cancels the run loop, drains waveform-gen. */
+export function stopPattern(): void {
+  if (patternRunCancel) {
+    patternRunCancel.cancelled = true;
+  }
+  app.isRunningPattern = false;
+  waveformGen?.reset();
+  pushDebugLog({ ts: Date.now(), direction: 'system', text: 'Pattern stopped' });
+}
+
+/** Toggle visibility of a single elcon row in oscilloscope. */
+export function toggleElconVisibility(eId: string): void {
+  const next = new Set(app.visibleElcons);
+  if (next.has(eId)) next.delete(eId);
+  else next.add(eId);
+  app.visibleElcons = next;
+}
+
+/** Toggle a trace (amp/vcap) on/off across all rows. */
+export function toggleTrace(trace: 'amp' | 'vcap'): void {
+  const next = new Set(app.activeTraces);
+  if (next.has(trace)) next.delete(trace);
+  else next.add(trace);
+  app.activeTraces = next;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
 }
