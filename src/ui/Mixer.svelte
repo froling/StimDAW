@@ -12,7 +12,7 @@
   import { lfoColor } from './synth/cable-helpers';
   import { ElectrodeMask, elconId, type Elcon } from '../patterns/types';
   import type { MixerChannel as ChannelT } from '../synth/types';
-  import { app, startMixer, stopMixer } from './stores.svelte';
+  import { app, startMixer, stopMixer, setLogDescriptors } from './stores.svelte';
 
   /**
    * Top-level Mixer-panel — komponerar MixerChannels + LFOs + CableLayer.
@@ -136,6 +136,17 @@
       {/if}
     </span>
     <div class="mixer-controls">
+      <label
+        class="log-toggle"
+        title="Logga varje descriptor till browser-konsolen ('synth-emit' prefix) + summary i CLI-panelen var 1s"
+      >
+        <input
+          type="checkbox"
+          checked={app.logDescriptors}
+          onchange={(e) => setLogDescriptors((e.currentTarget as HTMLInputElement).checked)}
+        />
+        Log descriptors
+      </label>
       <button
         type="button"
         class="run-btn"
@@ -242,7 +253,25 @@
   .mixer-controls {
     margin-left: auto;
     display: inline-flex;
-    gap: 0.4rem;
+    align-items: center;
+    gap: 0.6rem;
+  }
+  .log-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    font-family: ui-monospace, monospace;
+    font-size: 0.72rem;
+    color: #666;
+    cursor: pointer;
+    user-select: none;
+  }
+  .log-toggle input {
+    margin: 0;
+    cursor: pointer;
+  }
+  .log-toggle:hover {
+    color: #333;
   }
   .run-btn {
     padding: 0.35rem 0.85rem;

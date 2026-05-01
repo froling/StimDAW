@@ -93,6 +93,13 @@ class AppState {
   loopPattern = $state<boolean>(false);
   /** β.0 mixer engine running. Toggleras av startMixer/stopMixer. */
   isMixerRunning = $state<boolean>(false);
+  /**
+   * Logga varje emittad descriptor till browser-konsolen (filterbar via
+   * `[synth-emit]` prefix i DevTools). Plus periodic summary till
+   * app.debugLog (synlig i CLI-panelen) varje sekund.
+   * Off by default — minst 40 emits/s från aktiv mixer skulle flooda console.
+   */
+  logDescriptors = $state<boolean>(false);
 }
 
 /** Cap så att en tre-timmars patternrun inte sväller minnet — räcker för dev. */
@@ -535,6 +542,61 @@ function sleep(ms: number): Promise<void> {
 // ──────────────────────────────────────────────────────────────────────────
 
 let synthEngine: SynthEngine | null = null;
+const synthEmitLog = createLogger('synth-emit');
+
+/** Periodic summary state — accumulerar emits, flushar var 1000ms till debug-log. */
+const emitSummary = {
+  count: 0,
+  pwMin: Infinity,
+  pwMax: -Infinity,
+  paceMin: Infinity,
+  paceMax: -Infinity,
+  ampMin: Infinity,
+  ampMax: -Infinity,
+  flushTimer: null as ReturnType<typeof setTimeout> | null,
+};
+
+function flushEmitSummary(): void {
+  if (emitSummary.count === 0) return;
+  const text =
+    `mixer emit: ${emitSummary.count} descriptors ` +
+    `· pw ${emitSummary.pwMin}-${emitSummary.pwMax}µs ` +
+    `· pace ${(emitSummary.paceMin / 1000).toFixed(1)}-${(emitSummary.paceMax / 1000).toFixed(1)}ms ` +
+    `· amp ${emitSummary.ampMin}-${emitSummary.ampMax}`;
+  pushDebugLog({ ts: Date.now(), direction: 'sent', text });
+  emitSummary.count = 0;
+  emitSummary.pwMin = Infinity;
+  emitSummary.pwMax = -Infinity;
+  emitSummary.paceMin = Infinity;
+  emitSummary.paceMax = -Infinity;
+  emitSummary.ampMin = Infinity;
+  emitSummary.ampMax = -Infinity;
+}
+
+function logDescriptorEmit(desc: import('../protocol/descriptor').PtDescriptor): void {
+  if (!app.logDescriptors) return;
+  const paceMicros = desc.paceQuarterMs * 250;
+  // Per-emit verbose till console (filterbar i DevTools via 'synth-emit')
+  synthEmitLog.debug(
+    `seq=${desc.sequenceNumber} phase=${desc.phase & 0x01} ` +
+      `ec=[${desc.electrodeSet[0]},${desc.electrodeSet[1]}] ` +
+      `pw=${desc.pulseWidthMicros}µs pace=${paceMicros}µs amp=${desc.amplitude}`,
+  );
+  // Accumulera summary för debug-log-panel (var 1000ms)
+  emitSummary.count++;
+  emitSummary.pwMin = Math.min(emitSummary.pwMin, desc.pulseWidthMicros);
+  emitSummary.pwMax = Math.max(emitSummary.pwMax, desc.pulseWidthMicros);
+  emitSummary.paceMin = Math.min(emitSummary.paceMin, paceMicros);
+  emitSummary.paceMax = Math.max(emitSummary.paceMax, paceMicros);
+  emitSummary.ampMin = Math.min(emitSummary.ampMin, desc.amplitude);
+  emitSummary.ampMax = Math.max(emitSummary.ampMax, desc.amplitude);
+  if (emitSummary.flushTimer === null) {
+    emitSummary.flushTimer = setTimeout(() => {
+      emitSummary.flushTimer = null;
+      flushEmitSummary();
+    }, 1000);
+  }
+}
 
 /**
  * Lazy-init synth-engine på first start. RealtimeClock i prod, sink går till
@@ -561,6 +623,8 @@ function ensureSynthEngine(): SynthEngine {
         next.splice(0, next.length - DISPATCHED_BUFFER_CAP);
       }
       app.dispatchedDescriptors = next;
+      // Optional debug-log per descriptor (gated på app.logDescriptors toggle)
+      logDescriptorEmit(desc);
     },
     getRampPercent: () => ramp?.snapshot(performance.now()).effective ?? 0,
     getCeilingPercent: () => ceiling?.get() ?? app.ceiling,
@@ -603,4 +667,19 @@ export function stopMixer(): void {
   }
   app.isMixerRunning = false;
   pushDebugLog({ ts: Date.now(), direction: 'system', text: 'Mixer stopped' });
+  // Flush ev. ackumulerad summary direkt vid stop
+  if (emitSummary.flushTimer !== null) {
+    clearTimeout(emitSummary.flushTimer);
+    emitSummary.flushTimer = null;
+  }
+  flushEmitSummary();
+}
+
+export function setLogDescriptors(enabled: boolean): void {
+  app.logDescriptors = enabled;
+  pushDebugLog({
+    ts: Date.now(),
+    direction: 'system',
+    text: enabled ? 'Descriptor log enabled' : 'Descriptor log disabled',
+  });
 }
