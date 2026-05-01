@@ -42,7 +42,12 @@
   }
 </script>
 
-<div class="channel-strip" class:disabled={!channel.enabled}>
+<div
+  class="channel-strip"
+  class:disabled={!channel.enabled}
+  data-testid="channel-strip"
+  data-channel-id={channel.id}
+>
   <div class="channel-header">
     <button
       class="enable-toggle"

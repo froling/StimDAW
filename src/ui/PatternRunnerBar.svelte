@@ -30,6 +30,8 @@
         onclick={() => runPattern(p.name)}
         disabled={app.connection === 'disconnected' || app.isRunningPattern}
         title="Run {p.name} ({p.elcons.length} elcons, pace {Math.round(p.paceMicros / 1000)}ms)"
+        data-testid="pattern-button"
+        data-pattern-name={p.name}
       >
         {p.name}
       </button>
@@ -58,6 +60,7 @@
       class="stop-btn"
       onclick={stopPattern}
       disabled={!app.isRunningPattern}
+      data-testid="pattern-stop"
     >
       Stop pattern
     </button>

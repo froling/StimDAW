@@ -125,7 +125,7 @@
   }
 </script>
 
-<section class="mixer" bind:this={containerEl}>
+<section class="mixer" bind:this={containerEl} data-testid="mixer-panel">
   <div class="mixer-header">
     <h2 class="mixer-title">Mixer</h2>
     <span class="status">
@@ -144,6 +144,7 @@
           type="checkbox"
           checked={app.logDescriptors}
           onchange={(e) => setLogDescriptors((e.currentTarget as HTMLInputElement).checked)}
+          data-testid="mixer-log-toggle"
         />
         Log descriptors
       </label>
@@ -152,6 +153,7 @@
         class="run-btn"
         onclick={onRun}
         disabled={app.connection === 'disconnected' || isRunning}
+        data-testid="mixer-run"
       >
         Run
       </button>
@@ -160,6 +162,7 @@
         class="stop-btn"
         onclick={onStop}
         disabled={!isRunning}
+        data-testid="mixer-stop"
       >
         Stop
       </button>
@@ -174,7 +177,7 @@
       {#each synth.current.channels as ch (ch.id)}
         <MixerChannel channel={ch} modColors={getModColors(ch)} />
       {/each}
-      <button class="add-card" type="button" onclick={onAddChannel}>
+      <button class="add-card" type="button" onclick={onAddChannel} data-testid="mixer-add-channel">
         <span class="plus">+</span>
         <span class="add-label">Channel</span>
       </button>
@@ -189,7 +192,7 @@
       {#each synth.current.lfos as lfo, i (lfo.id)}
         <LFOModule {lfo} color={lfoColor(i)} />
       {/each}
-      <button class="add-card" type="button" onclick={onAddLfo}>
+      <button class="add-card" type="button" onclick={onAddLfo} data-testid="mixer-add-lfo">
         <span class="plus">+</span>
         <span class="add-label">LFO</span>
       </button>

@@ -42,7 +42,12 @@
   }
 </script>
 
-<div class="lfo-module" style="--lfo-color: {color};">
+<div
+  class="lfo-module"
+  style="--lfo-color: {color};"
+  data-testid="lfo-module"
+  data-lfo-id={lfo.id}
+>
   <div class="lfo-header">
     <span class="lfo-id" style="color: {color};">{lfo.id}</span>
     <button

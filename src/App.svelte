@@ -61,13 +61,14 @@
     <IntensitySlider />
 
     <!-- F1: source-mode tabs (segmented control), Mutex visuell — ej disabled-state -->
-    <div class="col-span-2 source-tabs" role="tablist" aria-label="Signal source">
+    <div class="col-span-2 source-tabs" role="tablist" aria-label="Signal source" data-testid="source-tabs">
       <button
         role="tab"
         aria-selected={activeMode === 'patterns'}
         class="source-tab"
         class:active={activeMode === 'patterns'}
         onclick={() => pickMode('patterns')}
+        data-testid="source-tab-patterns"
       >Patterns</button>
       <button
         role="tab"
@@ -75,6 +76,7 @@
         class="source-tab"
         class:active={activeMode === 'mixer'}
         onclick={() => pickMode('mixer')}
+        data-testid="source-tab-mixer"
       >Mixer</button>
     </div>
 
