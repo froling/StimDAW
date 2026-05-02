@@ -8,9 +8,9 @@ import { AttributeId } from '../protocol/opcodes';
 import type { Voltages } from '../protocol/attributes';
 import { loadSettings, saveSettings } from '../fileformat/io';
 import { createLogger } from '../log';
-import { generatePatternDescriptors, generateRecordedDescriptors, recordedDurationMicros } from '../patterns/runner';
+import { generatePatternDescriptors } from '../patterns/runner';
 import { getPatternByName } from '../patterns/builtins';
-import { isRecordedPattern, type AnyPattern, type PatternDef, type RecordedPatternMeta } from '../patterns/types';
+import type { PatternDef } from '../patterns/types';
 import { exportDispatchedAsCsv } from '../mock-firmware/csv-export';
 import { buildCsvFilename } from './csv-filename';
 import { SynthEngine } from '../synth/synth-engine';
@@ -69,8 +69,8 @@ class AppState {
   lastError = $state<string | null>(null);
 
   // ── β Oscilloscope state (post BETA_OSCILLOSCOPE.md rewrite) ──────────
-  /** Aktivt pattern (cycled eller recorded; null = idle). */
-  currentPattern = $state<AnyPattern | null>(null);
+  /** Aktivt pattern (null = idle). */
+  currentPattern = $state<PatternDef | null>(null);
   isRunningPattern = $state<boolean>(false);
   /**
    * Wire-truth-buffer: descriptors host emittat via writePtDescriptor.
@@ -446,8 +446,8 @@ function purgeOscilloscopeState(): void {
 }
 
 /**
- * Run named pattern. Dispatcher till cycled (PatternDef) eller recorded
- * (RecordedPatternMeta) flow baserat på pattern-typ.
+ * Run named pattern. Genererar descriptors host-side, skickar via NeoDKClient.
+ * Oscilloscope renderar via frame-builder från `app.dispatchedDescriptors`.
  */
 export async function runPattern(patternName: string): Promise<void> {
   if (!client) {
@@ -464,13 +464,6 @@ export async function runPattern(patternName: string): Promise<void> {
     return;
   }
 
-  if (isRecordedPattern(pattern)) {
-    return runRecordedPatternInner(pattern);
-  }
-  return runCycledPatternInner(pattern);
-}
-
-async function runCycledPatternInner(pattern: PatternDef): Promise<void> {
   app.currentPattern = pattern;
   app.isRunningPattern = true;
   pushDebugLog({
@@ -500,7 +493,6 @@ async function runCycledPatternInner(pattern: PatternDef): Promise<void> {
         initialSequenceNumber: cumulativeSeqNr,
       })) {
         if (cancel.cancelled) break;
-        if (!client) break;
         try {
           await client.writePtDescriptor(desc);
         } catch (e) {
@@ -527,112 +519,6 @@ async function runCycledPatternInner(pattern: PatternDef): Promise<void> {
     if (patternRunCancel === cancel) patternRunCancel = null;
     app.isRunningPattern = false;
     pushDebugLog({ ts: Date.now(), direction: 'system', text: `Pattern "${pattern.name}" finished` });
-  }
-}
-
-/**
- * Run recorded pattern (ET-312 patterns312-CSV).
- *
- * Skiljer sig från cycled-flowen:
- * - Awaitar meta.load() (kan vara fetch för stora CSVs)
- * - Hela inspelningen spelas one-shot från start till slut (ingen rep-cap;
- *   user-locked feedback: "play triggar full inspelning")
- * - Pacing: stay ~50ms framför wall-time istället för per-descriptor sleep
- *   (varierande timing i recorded data → adaptiv pacing krävs)
- * - Loop: när inspelningen slut + loopPattern true → restart med
- *   cumulativ time-offset så nästa iteration börjar där föregående slutade
- */
-async function runRecordedPatternInner(meta: RecordedPatternMeta): Promise<void> {
-  app.currentPattern = meta;
-  app.isRunningPattern = true;
-  pushDebugLog({
-    ts: Date.now(),
-    direction: 'system',
-    text: `Loading recorded pattern "${meta.name}" (${meta.stats.approxPulses} pulser, ~${meta.stats.approxDurationSeconds}s)…`,
-  });
-
-  let pulses: readonly import('../patterns/csv-format').RecordedPulse[];
-  try {
-    pulses = await meta.load();
-  } catch (e) {
-    pushDebugLog({
-      ts: Date.now(),
-      direction: 'system',
-      text: `Failed to load "${meta.name}": ${e instanceof Error ? e.message : String(e)}`,
-    });
-    app.isRunningPattern = false;
-    return;
-  }
-
-  pushDebugLog({
-    ts: Date.now(),
-    direction: 'system',
-    text: `Run recorded "${meta.name}" — ${pulses.length} pulser, ${(recordedDurationMicros(pulses) / 1_000_000).toFixed(1)}s`,
-  });
-
-  // PURGE oscilloscope-state + start frame-timer för clean run
-  purgeOscilloscopeState();
-  startFrameTimer();
-
-  const cancel = { cancelled: false };
-  patternRunCancel = cancel;
-
-  // Wall-clock-pacing: dispatcha så vi stay ~50ms framför wall-time
-  const PACING_AHEAD_MICROS = 50_000;
-  const recordingDurationMicros = recordedDurationMicros(pulses);
-
-  try {
-    let cumulativeStartTime = 0; // µs offset för nästa iteration
-    let cumulativeSeqNr = 0;
-    const wallStartMicros = performance.now() * 1000;
-
-    do {
-      for (const desc of generateRecordedDescriptors(pulses, {
-        channelAElcon: meta.channelAElcon,
-        channelBElcon: meta.channelBElcon,
-        initialStartTimeMicros: cumulativeStartTime,
-        initialSequenceNumber: cumulativeSeqNr,
-      })) {
-        if (cancel.cancelled) break;
-        if (!client) break;
-        try {
-          await client.writePtDescriptor(desc);
-        } catch (e) {
-          log.warn('writePtDescriptor failed:', e);
-          cancel.cancelled = true;
-          break;
-        }
-        const enqueueAtMicros = performance.now() * 1000;
-        const queueIdx = (desc.phase & 0x01) as 0 | 1;
-        recordDispatch(desc, {
-          descriptor: desc,
-          dispatchedAtMicros: enqueueAtMicros,
-          queueIdx,
-        });
-        mockFw?.onPulseFired?.(desc, enqueueAtMicros);
-
-        // Adaptiv pacing: håll dispatch ~50ms framför wall-time så
-        // firmware-queue inte överfylls och vi inte dispatcher för långt
-        // efter wall-time (skulle ge audio-dropout).
-        const wallElapsed = performance.now() * 1000 - wallStartMicros;
-        const dispatchAhead = desc.startTimeMicros - wallElapsed;
-        if (dispatchAhead > PACING_AHEAD_MICROS) {
-          const sleepMicros = dispatchAhead - PACING_AHEAD_MICROS;
-          await sleep(sleepMicros / 1000);
-        }
-        cumulativeSeqNr = (desc.sequenceNumber + 1) & 0xff;
-      }
-      // Nästa loop-iteration: start_time fortsätter från slutet av denna
-      cumulativeStartTime = (cumulativeStartTime + recordingDurationMicros) >>> 0;
-    } while (app.loopPattern && !cancel.cancelled);
-  } finally {
-    if (patternRunCancel === cancel) patternRunCancel = null;
-    app.isRunningPattern = false;
-    pushDebugLog({
-      ts: Date.now(),
-      direction: 'system',
-      text: `Recorded "${meta.name}" finished`,
-    });
   }
 }
 

@@ -6,13 +6,9 @@
  *   Elcon          [pos, neg] par av masks (disjunkt: pos & neg === 0)
  *   PatternDef     namn + elcons-array + pace + reps + steps
  *
- * Plus RecordedPatternMeta för ET-312 patterns312-CSV-inspelningar (per-puls
- * timing + Vprim-modulering bevarad, lazy-loaded).
- *
  * Module boundaries: pure data, ingen runtime state. Konsumeras av runner,
  * validate, csv-format, builtins, samt UI-elcon-label-formatting.
  */
-import type { RecordedPulse } from './csv-format';
 
 export type ElectrodeMask = number; // 0..15, bitmask A=1, B=2, C=4, D=8
 
@@ -24,8 +20,6 @@ export type ElectrodeMask = number; // 0..15, bitmask A=1, B=2, C=4, D=8
 export type Elcon = readonly [pos: ElectrodeMask, neg: ElectrodeMask];
 
 export interface PatternDef {
-  /** Discriminator för AnyPattern-union. Optional för back-compat. */
-  readonly kind?: 'cycled';
   /** Display name, t.ex. "Jackhammer" */
   readonly name: string;
   /** Elcon-sekvens. Längd 2-50+, varierar per pattern. */
@@ -37,53 +31,6 @@ export interface PatternDef {
   /** Antal repetitioner av hela pattern-cykeln. */
   readonly nrOfReps: number;
 }
-
-/**
- * Recorded pattern — descriptor-stream från en faktisk inspelning (t.ex.
- * patterns312/*.csv). Skiljer sig från PatternDef genom att varje puls har
- * sin egen timing + amplitude (Vprim) — kan ej uttryckas som constant-pace
- * cykling.
- *
- * Loadern är async så stora CSVs kan lazy-fetchas från public/patterns312/
- * istället för att blåsa upp bundle-storleken (Orgasm_max är 5.2 MB).
- *
- * Mappning: ET-312 har två oberoende effektkanaler (Stage 'A' och 'B' i
- * CSV). Mappas till två hardware-valid NeoDK-elcons via channelAElcon och
- * channelBElcon. Defaults [A, B] resp [C, D] — disjoint så channels kan
- * fyra simultant utan switch-matrix-konflikt.
- */
-export interface RecordedPatternMeta {
-  /** Discriminator för AnyPattern-union. */
-  readonly kind: 'recorded';
-  /** Display name, t.ex. "312-Intense" */
-  readonly name: string;
-  /** Kort beskrivning för tooltip/UI. */
-  readonly description: string;
-  /** ET-312 Stage 'A' → NeoDK elcon. Default [A, B]. */
-  readonly channelAElcon: Elcon;
-  /** ET-312 Stage 'B' → NeoDK elcon. Default [C, D]. */
-  readonly channelBElcon: Elcon;
-  /** Async loader — embedded CSV string eller fetch från public/. */
-  readonly load: () => Promise<readonly RecordedPulse[]>;
-  /** Estimerad pulse count + duration för UI-tooltips (utan att triggra load). */
-  readonly stats: {
-    readonly approxPulses: number;
-    readonly approxDurationSeconds: number;
-  };
-}
-
-/** Union — UI-listor och runPattern-dispatch hanterar båda. */
-export type AnyPattern = PatternDef | RecordedPatternMeta;
-
-export function isRecordedPattern(p: AnyPattern): p is RecordedPatternMeta {
-  return (p as RecordedPatternMeta).kind === 'recorded';
-}
-
-/**
- * Re-exporterad så runner.ts och builtins.ts inte behöver importera från
- * csv-format separat.
- */
-export type { RecordedPulse };
 
 // ──────────────────────────────────────────────────────────────────
 // ElectrodeMask helpers

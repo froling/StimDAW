@@ -1,6 +1,6 @@
 <script lang="ts">
   import { app, runPattern, stopPattern, exportDispatchedCsv } from './stores.svelte';
-  import { builtinPatterns, recorded312Patterns } from '../patterns/builtins';
+  import { builtinPatterns } from '../patterns/builtins';
 
   // Temp control panel — DAW kommer ersätta detta i β.
   // Per design-locks: control-elementen tillhör INTE Oscilloscope-panelen,
@@ -22,49 +22,23 @@
     </span>
   </div>
 
-  <div class="group">
-    <span class="group-label">Firmware</span>
-    <div class="quick">
-      {#each builtinPatterns as p}
-        <button
-          type="button"
-          class="run-btn"
-          onclick={() => runPattern(p.name)}
-          disabled={app.connection === 'disconnected' || app.isRunningPattern}
-          title="Run {p.name} ({p.elcons.length} elcons, pace {Math.round(p.paceMicros / 1000)}ms)"
-          data-testid="pattern-button"
-          data-pattern-name={p.name}
-        >
-          {p.name}
-        </button>
-      {/each}
-    </div>
-  </div>
-
-  <div class="group">
-    <span class="group-label">ET-312 recordings</span>
-    <div class="quick">
-      {#each recorded312Patterns as p}
-        <button
-          type="button"
-          class="run-btn run-btn-recorded"
-          onclick={() => runPattern(p.name)}
-          disabled={app.connection === 'disconnected' || app.isRunningPattern}
-          title={p.description}
-          data-testid="pattern-button"
-          data-pattern-name={p.name}
-        >
-          {p.name}
-          <span class="duration">{Math.round(p.stats.approxDurationSeconds)}s</span>
-        </button>
-      {/each}
-    </div>
-  </div>
-
-  <div class="controls-row">
+  <div class="quick">
+    {#each builtinPatterns as p}
+      <button
+        type="button"
+        class="run-btn"
+        onclick={() => runPattern(p.name)}
+        disabled={app.connection === 'disconnected' || app.isRunningPattern}
+        title="Run {p.name} ({p.elcons.length} elcons, pace {Math.round(p.paceMicros / 1000)}ms)"
+        data-testid="pattern-button"
+        data-pattern-name={p.name}
+      >
+        {p.name}
+      </button>
+    {/each}
     <label
       class="loop-toggle"
-      title="Repetera valt pattern tills Stop pattern trycks. För recorded patterns: spelar om hela inspelningen från början."
+      title="Repetera valt pattern tills Stop pattern trycks. Loop-läge bypassar 5-rep-cap."
     >
       <input type="checkbox" bind:checked={app.loopPattern} />
       Loop
@@ -73,12 +47,12 @@
       type="button"
       class="export-btn"
       onclick={exportDispatchedCsv}
-      disabled={app.dispatchedDescriptors.length === 0}
+      disabled={app.dispatchedCount === 0}
       title="Export dispatched descriptors as patterns312-CSV"
     >
       Export CSV
-      {#if app.dispatchedDescriptors.length > 0}
-        <span class="export-count">({app.dispatchedDescriptors.length})</span>
+      {#if app.dispatchedCount > 0}
+        <span class="export-count">({app.dispatchedCount})</span>
       {/if}
     </button>
     <button
@@ -93,10 +67,9 @@
   </div>
 
   <p class="footnote">
-    Temp panel — DAW (β) kommer ersätta. Firmware-patterns kappas till
-    5 reps i one-shot, full pattern.nrOfReps i loop. ET-312-recordings
-    spelar full inspelning, loopar om checkbox är på. CSV-export = host-
-    sanning (vad runner skickade), inte firmware-sidans dispatch.
+    Temp panel — DAW (β) kommer ersätta. One-shot kappas till 5 reps i α2;
+    Loop kör pattern.nrOfReps fullt och repeterar tills Stop. CSV-export =
+    host-sanning (vad runner skickade), inte firmware-sidans dispatch.
   </p>
 </section>
 
@@ -149,26 +122,11 @@
     font-weight: 500;
   }
 
-  .group {
-    display: flex;
-    align-items: flex-start;
-    gap: 0.75rem;
-    margin-bottom: 0.5rem;
-  }
-  .group-label {
-    font-family: ui-monospace, monospace;
-    font-size: 0.7rem;
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-    color: #888;
-    min-width: 110px;
-    padding-top: 0.45rem;
-  }
   .quick {
     display: flex;
     flex-wrap: wrap;
     gap: 0.4rem;
-    flex: 1;
+    margin-bottom: 0.5rem;
   }
   .run-btn {
     padding: 0.4rem 0.85rem;
@@ -187,28 +145,6 @@
   .run-btn:disabled {
     opacity: 0.4;
     cursor: not-allowed;
-  }
-  .run-btn-recorded {
-    border-color: #c0a0d0;
-    background: #faf6fd;
-  }
-  .run-btn-recorded:hover:not(:disabled) {
-    background: #f3ebfa;
-    border-color: #8a4abf;
-    color: #8a4abf;
-  }
-  .duration {
-    color: #888;
-    font-family: ui-monospace, monospace;
-    font-size: 0.7rem;
-    margin-left: 0.3rem;
-  }
-
-  .controls-row {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.4rem;
-    margin-top: 0.5rem;
   }
   .stop-btn {
     padding: 0.4rem 0.85rem;
@@ -275,9 +211,8 @@
   }
 
   .footnote {
-    margin: 0.6rem 0 0;
+    margin: 0.4rem 0 0;
     color: #aaa;
     font-size: 0.75rem;
-    line-height: 1.4;
   }
 </style>
