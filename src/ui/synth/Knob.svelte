@@ -58,13 +58,26 @@
   let knobAngle = $derived(-135 + valueToT(value, bounds, { log }) * 270);
   // SVG large-arc-flag: 1 när bågens sweep > 180°. Sweep = knobAngle - (-135)
   // = knobAngle + 135. Tröskel: knobAngle > 45° (sweep > 180°).
-  // Tidigare fillFraction > 0.5 (knobAngle > 0) flippade flaggan för tidigt
-  // → bågen ritades fel runt cirkelns bortre halva mellan ~50% och ~67%.
   let largeArcFlag = $derived(knobAngle > 45 ? '1' : '0');
+
+  // Track-radius. Måste matcha precist mellan start/end-punkter och rx/ry så
+  // SVG-renderaren hittar EN entydig cirkel centrerad i origo. Tidigare
+  // hardcoded "-32.4 32.4" var off med 0.14 från radie 45.96 → renderaren
+  // tvingades välja en cirkel centrerad bredvid origo, och vid vinklar nära
+  // 180° sweep blev valet numeriskt instabilt → bågen hoppade till fel cirkel
+  // mellan ~50% och ~70%.
+  const TRACK_RADIUS = 45.96;
+  const SQRT_HALF = Math.SQRT1_2; // 1/√2 ≈ 0.7071068
+  // Start/end på 270°-bågen: -135° resp +135° från top, dvs ±radius/√2 i båda axlarna.
+  const TRACK_START_X = -TRACK_RADIUS * SQRT_HALF;
+  const TRACK_START_Y = TRACK_RADIUS * SQRT_HALF;
+  const TRACK_END_X = TRACK_RADIUS * SQRT_HALF;
+  const TRACK_END_Y = TRACK_RADIUS * SQRT_HALF;
+
   let pointerX = $derived(Math.cos(((knobAngle - 90) * Math.PI) / 180) * 28);
   let pointerY = $derived(Math.sin(((knobAngle - 90) * Math.PI) / 180) * 28);
-  let arcEndX = $derived(Math.cos(((knobAngle - 90) * Math.PI) / 180) * 45.96);
-  let arcEndY = $derived(Math.sin(((knobAngle - 90) * Math.PI) / 180) * 45.96);
+  let arcEndX = $derived(Math.cos(((knobAngle - 90) * Math.PI) / 180) * TRACK_RADIUS);
+  let arcEndY = $derived(Math.sin(((knobAngle - 90) * Math.PI) / 180) * TRACK_RADIUS);
 
   let formatted = $derived(formatKnobValue(value, unit));
 
@@ -124,14 +137,14 @@
       <!-- Outer arc 270° för rotations-range (visuell guide) -->
       <path
         class="knob-track"
-        d="M -32.4 32.4 A 45.96 45.96 0 1 1 32.4 32.4"
+        d="M {TRACK_START_X.toFixed(3)} {TRACK_START_Y.toFixed(3)} A {TRACK_RADIUS} {TRACK_RADIUS} 0 1 1 {TRACK_END_X.toFixed(3)} {TRACK_END_Y.toFixed(3)}"
         fill="none"
         stroke-width="3"
       />
       <!-- Filled arc upp till knob-angle, från min (-135°) till current -->
       <path
         class="knob-fill"
-        d="M -32.4 32.4 A 45.96 45.96 0 {largeArcFlag} 1 {arcEndX.toFixed(2)} {arcEndY.toFixed(2)}"
+        d="M {TRACK_START_X.toFixed(3)} {TRACK_START_Y.toFixed(3)} A {TRACK_RADIUS} {TRACK_RADIUS} 0 {largeArcFlag} 1 {arcEndX.toFixed(3)} {arcEndY.toFixed(3)}"
         fill="none"
         stroke-width="3"
       />
