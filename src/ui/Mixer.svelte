@@ -1,5 +1,4 @@
 <script lang="ts">
-  import { untrack } from 'svelte';
   import {
     synth,
     addChannel,
@@ -10,7 +9,7 @@
   import LFOModule from './synth/LFOModule.svelte';
   import CableLayer from './synth/CableLayer.svelte';
   import { lfoColor } from './synth/cable-helpers';
-  import { ElectrodeMask, elconId, type Elcon } from '../patterns/types';
+  import { ElectrodeMask, type Elcon } from '../patterns/types';
   import type { MixerChannel as ChannelT } from '../synth/types';
   import { app, startMixer, stopMixer, setLogDescriptors } from './stores.svelte';
 
@@ -30,8 +29,10 @@
   /** F2 seed-state: 1 channel + 1 LFO vid första mount om allt är tomt. */
   $effect(() => {
     if (synth.current.channels.length === 0 && synth.current.lfos.length === 0) {
-      // Seed med ET-312-channel-A-equivalent (NeoDK A↔C)
-      addChannel([ElectrodeMask.A, ElectrodeMask.C]);
+      // Seed med full quadrupole AC↔BD — alla 4 elektroder aktiva, mest
+      // "dense" stim. Notera: tidigare seed [A, C] var hardware-INVALID
+      // (A och C är båda på T+ sidan, kan ej vara opposite poles).
+      addChannel([ElectrodeMask.AC, ElectrodeMask.BD]);
       addLfo('sine');
     }
   });
@@ -45,26 +46,11 @@
   });
 
   /**
-   * Auto-add nya channel-elcons till app.visibleElcons så Oscilloscope
-   * visar rows omedelbart när channels läggs till. User toggle-off
-   * persisterar (vi addar bara, tar aldrig bort). untrack() runt
-   * visibleElcons-läs så $effect inte triggrar om sig själv.
+   * β post-rewrite: Oscilloscope visar alltid 4 fasta electrode-rader
+   * (A/B/C/D), inte per-elcon-rader. Ingen visibleElcons-logic behövs
+   * längre — channels lägger automatiskt till pulser på de electrodes
+   * de berör.
    */
-  $effect(() => {
-    const channels = synth.current.channels; // tracked
-    untrack(() => {
-      const next = new Set(app.visibleElcons);
-      let changed = false;
-      for (const ch of channels) {
-        const id = elconId(ch.elcon);
-        if (!next.has(id)) {
-          next.add(id);
-          changed = true;
-        }
-      }
-      if (changed) app.visibleElcons = next;
-    });
-  });
 
   /** Beräkna modColors för en channel — vilka av dess knobs är modulerade,
    *  och i vilken LFO-färg. Per audit F4. */
@@ -86,24 +72,29 @@
   }
 
   function onAddChannel(): void {
-    // Default ny channel — användaren kan picka elcon i en framtida picker (β.1)
-    // För β.0: cykla genom A>B, A>C, A>D, B>C, B>D, C>D
+    // Cykla genom de 9 hardware-VALID elcon-konfigurationerna.
+    // En sida från {A,C}, andra från {B,D}. Inga A↔C eller B↔D
+    // (de electroderna är buddies på samma transformator-sida i switch
+    // matrix — fysiskt omöjligt). Komplett picker kommer i β.1.
     const used = new Set(
       synth.current.channels.map((c) => `${c.elcon[0]}-${c.elcon[1]}`),
     );
     const candidates: Elcon[] = [
       [ElectrodeMask.A, ElectrodeMask.B],
-      [ElectrodeMask.A, ElectrodeMask.C],
       [ElectrodeMask.A, ElectrodeMask.D],
-      [ElectrodeMask.B, ElectrodeMask.C],
-      [ElectrodeMask.B, ElectrodeMask.D],
+      [ElectrodeMask.C, ElectrodeMask.B],
       [ElectrodeMask.C, ElectrodeMask.D],
+      [ElectrodeMask.A, ElectrodeMask.BD],
+      [ElectrodeMask.C, ElectrodeMask.BD],
+      [ElectrodeMask.AC, ElectrodeMask.B],
+      [ElectrodeMask.AC, ElectrodeMask.D],
+      [ElectrodeMask.AC, ElectrodeMask.BD],
     ];
     const next = candidates.find((e) => !used.has(`${e[0]}-${e[1]}`));
     if (next) {
       addChannel(next);
     } else {
-      // All 6 disjoint A-D pairs used — bara lägg till en duplikat (allowed per Hour 4-5)
+      // Alla 9 unique konfigs upptagna — duplikera default (tillåtet för β.0)
       addChannel([ElectrodeMask.A, ElectrodeMask.B]);
     }
   }

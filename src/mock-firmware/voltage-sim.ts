@@ -6,14 +6,30 @@
  * Vbat: ~9V battery, light noise.
  * Iprim: roughly proportional to intensity when playing, ~0 otherwise.
  *
+ * Per-puls Vcap-dipp (β post-rewrite, eng-review T2): onPulseFired() drar
+ * ner Vcap proportionellt mot pulse-energi (amp × pw). RC-recovery via
+ * existing advance() fyller på mellan pulser. Detta gör Vcap-trace
+ * descriptor-driven (verklig hardware-behavior), inte enbart intensity-
+ * baseline.
+ *
  * Boundary clamps prevent NaN/Inf reaching the wire (per outside-voice finding).
  */
+import type { PtDescriptor } from '../protocol/descriptor';
 
 const V_BAT_NOMINAL_MV = 8800;
 const V_CAP_MAX_MV = 80000;
 const RC_TAU_MS = 200;
 const NOISE_MV = 50;
 const NOISE_MA = 20;
+
+/**
+ * Per-puls dipp-modell. amp×pw är proxy för "hur mycket laddning denna
+ * puls drog från caps". Vid full puls (amp=255, pw=200µs) får vi en dipp
+ * på ~PULSE_DIP_FACTOR_MV mV. Realistic-ish värde — baserat på intuitiv
+ * skala, inte rigorös fysik. Real hardware kommer kalibrera detta.
+ */
+const PULSE_DIP_FACTOR_MV = 800;
+const FULL_DIP_AMP_X_PW = 255 * 200;
 
 export interface VoltageReading {
   Vbat_mV: number;
@@ -32,6 +48,23 @@ export class VoltageSim {
 
   setPlaying(playing: boolean): void {
     this.playing = playing;
+  }
+
+  /**
+   * Notifiera om en avfyrad puls. Drar ner Vcap proportionellt mot
+   * (amp × pulse_width). RC-recovery sker i advance() mellan ticks.
+   * amp=0 i descriptor betyder "behåll föregående voltage" per spec,
+   * så vi använder INTE descriptor.amplitude direkt utan en proxy
+   * för pulse-energi (amp byte × pw µs).
+   */
+  onPulseFired(desc: PtDescriptor): void {
+    const amp = clamp(desc.amplitude, 0, 255);
+    const pw = clamp(desc.pulseWidthMicros, 0, 200);
+    if (amp === 0 || pw === 0) return; // amp=0 = inherit, ingen energi-dipp
+    const energyProxy = amp * pw;
+    const dipMv = (energyProxy / FULL_DIP_AMP_X_PW) * PULSE_DIP_FACTOR_MV;
+    this.vcapMv -= dipMv;
+    if (this.vcapMv < 0) this.vcapMv = 0;
   }
 
   /** Advance the model by `dtMs` simulated milliseconds. */

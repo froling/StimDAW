@@ -10,6 +10,7 @@
   import Cli from './ui/Cli.svelte';
   import PatternRunnerBar from './ui/PatternRunnerBar.svelte';
   import Oscilloscope from './ui/Oscilloscope.svelte';
+  import PolarFlow from './ui/PolarFlow.svelte';
   import Mixer from './ui/Mixer.svelte';
   import { createLogger } from './log';
 
@@ -88,6 +89,9 @@
       {/if}
     </div>
 
+    <div class="col-span-2">
+      <PolarFlow />
+    </div>
     <div class="col-span-2">
       <Oscilloscope />
     </div>

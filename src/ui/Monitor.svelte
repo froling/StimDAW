@@ -1,10 +1,14 @@
 <script lang="ts">
   import { app } from './stores.svelte';
-  import type { Voltages } from '../protocol/attributes';
+  import type { VoltageSample } from '../oscilloscope/voltage-state';
 
-  type VKey = keyof Voltages;
+  type VKey = 'Vbat_mV' | 'Vcap_mV' | 'Iprim_mA';
 
-  function sparkPoints(history: Voltages[], key: VKey, max: number): string {
+  function sparkPoints(
+    history: readonly VoltageSample[],
+    key: VKey,
+    max: number,
+  ): string {
     if (history.length < 2) return '';
     const w = 200;
     const h = 30;

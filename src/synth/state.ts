@@ -23,6 +23,7 @@ import type {
 } from './types';
 import { KNOB_DEFAULTS } from './types';
 import type { Elcon } from '../patterns/types';
+import { checkElcon } from '../patterns/validate';
 
 let nextIdCounter = 1;
 function nextId(prefix: string): string {
@@ -41,6 +42,10 @@ export function emptyState(): MixerState {
 // ── Channels ────────────────────────────────────────────────────────
 
 export function addChannel(state: MixerState, elcon: Elcon): MixerState {
+  // Validera elcon mot hardware-buddy-pair-constraint (NeoDK switch matrix:
+  // {A,C} delar T+ wiring, {B,D} delar T− wiring). Throws PatternValidationError
+  // om invalid — UI ska aldrig skicka invalid, men defense-in-depth.
+  checkElcon(elcon);
   const channel: MixerChannel = {
     id: nextId('ch'),
     elcon,
@@ -52,6 +57,24 @@ export function addChannel(state: MixerState, elcon: Elcon): MixerState {
     enabled: true,
   };
   return { ...state, channels: [...state.channels, channel] };
+}
+
+/**
+ * Uppdatera elcon på existerande channel. Validerar mot buddy-pair-constraint.
+ * UI:t (ElconPicker) använder detta när användaren togglar electrodes på/av.
+ */
+export function setChannelElcon(
+  state: MixerState,
+  channelId: string,
+  elcon: Elcon,
+): MixerState {
+  checkElcon(elcon);
+  return {
+    ...state,
+    channels: state.channels.map((ch) =>
+      ch.id !== channelId ? ch : { ...ch, elcon },
+    ),
+  };
 }
 
 /**

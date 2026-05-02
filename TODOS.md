@@ -1,5 +1,41 @@
 # TODOS
 
+## β.1 — Real hardware bring-up
+
+### Protocol-routing: Invoke START/STOP via NeoDKClient
+
+**What:** Implementera `NeoDKClient.invokePtQueueStart()` och `invokePtQueueStop()` som skickar OPCode.InvokeRequest med EE_BOOLEAN_TRUE/FALSE på AI_PT_DESCRIPTOR_QUEUE. Uppdatera `runPattern`/`startMixer` i `stores.svelte.ts` så de skickar Invoke START efter första writePtDescriptor (per `sequencer.c:269` kräver real firmware att queue är non-empty innan stateStreaming triggas). Stop-flow: cancel.cancelled + await loop-exit + await invokePtQueueStop. Mock-firmware: lägg till Invoke-handler i handleDatagram för AI_PT_DESCRIPTOR_QUEUE som transitar state.PlayState. Ta bort mockFw.onPulseFired-hacket (mock-only kod) — voltage-sim aktiveras nu via protokollet.
+
+**Why:** Fixar två arch-issues som outside voice flaggade men sköts till real-hardware-bring-up: (1) DAW->mock direct-invoke bypass:ar Transport (bryter protocol boundary), (2) real firmware kommer aldrig att leverera output utan Invoke START — vår host-emit-mode skulle silent-fail på riktig hardware. Att fixa nu via mock säkerställer att första real-hw-bring-up bara funkar.
+
+**Context:** Phase A i `docs/designs/BETA_DAW_VIZ_BOUNDARY.md` skissade detta men reducerades till one-liner per outside voice's strategic-miscalibration-feedback. Routingen sparades till denna TODO. Outside voice's Risk A: ordering måste vara write-first → START (inte START-first). Outside voice's Risk B: PlayState notify spam — gate notify på state-change (only fire if old != new).
+
+**Effort:** M (CC ~2h)
+**Priority:** P2 (när real NeoDK ansluts; inte blockerande för mock-driven β.0)
+**Depends on:** Real hardware + verifiering mot riktig firmware-state-machine
+
+### β.0 polish: DAW/Viz boundary-clarity comments
+
+**What:** Top-of-file JSDoc-headers per modul i `src/synth/`, `src/oscilloscope/`, `src/ui/` som klargör layer-roll (DAW composition / Viz consumption / Bridge state). Plus rensa dead-comments från α2-eran i stores.svelte.ts (referenser till waveform.ts-flödet).
+
+**Why:** Codebase navigerings-klarhet. Sänker on-boarding-cost när hjälpare/AI-coder kommer in i projektet.
+
+**Context:** Phase B i BETA_DAW_VIZ_BOUNDARY.md, deferred. Inga funktionella ändringar.
+
+**Effort:** XS (CC ~30 min)
+**Priority:** P3
+
+### β.1 prep: Channel-identity i DispatchedDescriptor
+
+**What:** Utöka `DispatchedDescriptor` med `meta?: { sourceTag?: string }` host-side metadata. Synth-engine och pattern-runner sätter sourceTag (channel.id eller pattern.name). Viz använder för subtle color-coding av multi-channel mixer.
+
+**Why:** Multi-channel mixer (β.1-mål) behöver visualisera channel-identitet. Utan detta blandar pulser från olika channels in i samma rad utan visuell distinktion.
+
+**Context:** Phase C i BETA_DAW_VIZ_BOUNDARY.md, deferred. Användarens directive "Mixer HELT skilt från viz" gör off-protocol metadata till en design-fråga som behöver tas igen vid β.1.
+
+**Effort:** S (CC ~1h)
+**Priority:** P3 (vid β.1 multi-channel-arbete)
+
 ## Pattern Engine (γ-prep — supersedes β-prep efter β-mixer-plan 2026-05-01)
 
 ### Pattern + Bank + Scene data-structures + JSON-schema

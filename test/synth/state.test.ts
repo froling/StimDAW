@@ -3,6 +3,7 @@ import {
   emptyState,
   addChannel,
   removeChannel,
+  setChannelElcon,
   updateKnobBase,
   setChannelEnabled,
   addLfo,
@@ -17,6 +18,7 @@ import {
   _resetIdsForTesting,
 } from '../../src/synth/state';
 import { ElectrodeMask } from '../../src/patterns/types';
+import { PatternValidationError } from '../../src/patterns/validate';
 
 beforeEach(() => {
   _resetIdsForTesting();
@@ -57,6 +59,39 @@ test('removeChannel: tar bort channel', () => {
   const id = s.channels[0]!.id;
   s = removeChannel(s, id);
   expect(s.channels).toEqual([]);
+});
+
+test('addChannel: throws PatternValidationError vid hardware-invalid elcon', () => {
+  const s = emptyState();
+  // [A, C] = båda i {A,C}-buddy-paret = invalid
+  expect(() => addChannel(s, [ElectrodeMask.A, ElectrodeMask.C])).toThrow(PatternValidationError);
+  // [B, D] = båda i {B,D}-buddy-paret = invalid
+  expect(() => addChannel(s, [ElectrodeMask.B, ElectrodeMask.D])).toThrow(PatternValidationError);
+});
+
+test('setChannelElcon: uppdaterar elcon på existerande channel', () => {
+  let s = addChannel(emptyState(), [ElectrodeMask.A, ElectrodeMask.B]);
+  const id = s.channels[0]!.id;
+  s = setChannelElcon(s, id, [ElectrodeMask.AC, ElectrodeMask.BD]);
+  expect(s.channels[0]?.elcon).toEqual([ElectrodeMask.AC, ElectrodeMask.BD]);
+});
+
+test('setChannelElcon: bevarar knob-state när elcon ändras', () => {
+  let s = addChannel(emptyState(), [ElectrodeMask.A, ElectrodeMask.B]);
+  const id = s.channels[0]!.id;
+  s = updateKnobBase(s, id, 'amplitude', 200);
+  s = setChannelElcon(s, id, [ElectrodeMask.AC, ElectrodeMask.BD]);
+  expect(s.channels[0]?.knobs.amplitude.base).toBe(200); // bevaras
+  expect(s.channels[0]?.elcon).toEqual([ElectrodeMask.AC, ElectrodeMask.BD]); // ändrad
+});
+
+test('setChannelElcon: throws vid hardware-invalid elcon', () => {
+  let s = addChannel(emptyState(), [ElectrodeMask.A, ElectrodeMask.B]);
+  const id = s.channels[0]!.id;
+  expect(() => setChannelElcon(s, id, [ElectrodeMask.A, ElectrodeMask.C])).toThrow(PatternValidationError);
+  expect(() => setChannelElcon(s, id, [ElectrodeMask.B, ElectrodeMask.D])).toThrow(PatternValidationError);
+  // Channel-state oförändrad efter throw
+  expect(s.channels[0]?.elcon).toEqual([ElectrodeMask.A, ElectrodeMask.B]);
 });
 
 test('updateKnobBase: bara den specifika knob på den specifika channeln ändras', () => {

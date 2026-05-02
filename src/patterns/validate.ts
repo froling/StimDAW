@@ -1,5 +1,35 @@
-import type { Elcon, PatternDef } from './types';
-import { isDisjoint, elconToLabel } from './types';
+import type { Elcon, ElectrodeMask, PatternDef } from './types';
+import { isDisjoint, elconToLabel, ElectrodeMask as EM } from './types';
+
+/**
+ * Hårdvaru-buddy-pairs (per NeoDK switch matrix, 4 opto-triacs U4-U7):
+ *   A och C delar T+ wiring (U4, U6) — kan ALDRIG vara på olika sidor
+ *   B och D delar T− wiring (U5, U7) — kan ALDRIG vara på olika sidor
+ *
+ * Polaritetsbiten flippar transformatorns ±, men ändrar INTE wiringen.
+ * Endast 9 fysiskt giltiga (pos,neg)-konfigurationer finns:
+ *   pos ∈ {A, C, AC}  AND  neg ∈ {B, D, BD}    (3×3 = 9)
+ *   PLUS deras polaritetsspeglingar (samma 9, omvänt) = 18 oriented.
+ *
+ * Källa: reference/NeoDK/Design.md §"Switch matrix" + patterns.c:22 enum
+ * (EL_AC, EL_BD är fördefinierade buddy-pair-konstanter; EL_AB / EL_CD finns inte).
+ */
+export const PAIR_AC: ElectrodeMask = EM.A | EM.C; // 0x05
+export const PAIR_BD: ElectrodeMask = EM.B | EM.D; // 0x0A
+
+/**
+ * True om elcon respekterar buddy-pair-constraint.
+ * En sida måste vara delmängd av {A,C}, andra sida delmängd av {B,D}.
+ */
+export function isElconHardwareValid(elcon: Elcon): boolean {
+  const [pos, neg] = elcon;
+  if (pos === 0 || neg === 0) return false; // empty side = ingen ström
+  const posInAC = (pos & ~PAIR_AC) === 0;
+  const posInBD = (pos & ~PAIR_BD) === 0;
+  const negInAC = (neg & ~PAIR_AC) === 0;
+  const negInBD = (neg & ~PAIR_BD) === 0;
+  return (posInAC && negInBD) || (posInBD && negInAC);
+}
 
 export class PatternValidationError extends Error {
   constructor(
@@ -56,7 +86,7 @@ export function checkPattern(pattern: PatternDef): void {
   }
 }
 
-/** Validera en enskild elcon (disjunkt-regel). Throws på violation. */
+/** Validera en enskild elcon (disjunkt-regel + hårdvaru-buddy-pair). Throws på violation. */
 export function checkElcon(elcon: Elcon, patternName?: string, index?: number): void {
   const [pos, neg] = elcon;
   if (pos < 0 || pos > 15 || !Number.isInteger(pos)) {
@@ -76,6 +106,16 @@ export function checkElcon(elcon: Elcon, patternName?: string, index?: number): 
   if (!isDisjoint(pos, neg)) {
     throw new PatternValidationError(
       `Short circuit in elcon ${elconToLabel(elcon)}: pos and neg overlap (pos=${pos}, neg=${neg}, pos&neg=${pos & neg})`,
+      patternName,
+      index,
+    );
+  }
+  // Hårdvaru-constraint: NeoDK switch matrix har 4 fasta opto-triacs.
+  // A och C delar T+ wiring; B och D delar T− wiring. En sida måste vara
+  // delmängd av {A,C}, andra sida delmängd av {B,D}.
+  if (!isElconHardwareValid(elcon)) {
+    throw new PatternValidationError(
+      `Hardware-invalid elcon ${elconToLabel(elcon)}: A and C share T+ wiring (U4/U6), B and D share T− wiring (U5/U7). One side must be a subset of {A,C}, the other a subset of {B,D}. (pos=${pos}, neg=${neg})`,
       patternName,
       index,
     );

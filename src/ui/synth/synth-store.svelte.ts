@@ -46,6 +46,10 @@ export function setChannelEnabled(channelId: string, enabled: boolean): void {
   synth.current = state.setChannelEnabled(synth.current, channelId, enabled);
 }
 
+export function setChannelElcon(channelId: string, elcon: Elcon): void {
+  synth.current = state.setChannelElcon(synth.current, channelId, elcon);
+}
+
 // ── LFO actions ────────────────────────────────────────────────────
 
 export function addLfo(shape: WaveShape = 'sine'): void {
