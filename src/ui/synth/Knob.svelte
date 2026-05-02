@@ -56,7 +56,11 @@
 
   // Visuell rotation: -135° (min) till +135° (max), så pekaren fyller 270° båge
   let knobAngle = $derived(-135 + valueToT(value, bounds, { log }) * 270);
-  let fillFraction = $derived((knobAngle - -135) / 270);
+  // SVG large-arc-flag: 1 när bågens sweep > 180°. Sweep = knobAngle - (-135)
+  // = knobAngle + 135. Tröskel: knobAngle > 45° (sweep > 180°).
+  // Tidigare fillFraction > 0.5 (knobAngle > 0) flippade flaggan för tidigt
+  // → bågen ritades fel runt cirkelns bortre halva mellan ~50% och ~67%.
+  let largeArcFlag = $derived(knobAngle > 45 ? '1' : '0');
   let pointerX = $derived(Math.cos(((knobAngle - 90) * Math.PI) / 180) * 28);
   let pointerY = $derived(Math.sin(((knobAngle - 90) * Math.PI) / 180) * 28);
   let arcEndX = $derived(Math.cos(((knobAngle - 90) * Math.PI) / 180) * 45.96);
@@ -127,7 +131,7 @@
       <!-- Filled arc upp till knob-angle, från min (-135°) till current -->
       <path
         class="knob-fill"
-        d="M -32.4 32.4 A 45.96 45.96 0 {fillFraction > 0.5 ? '1' : '0'} 1 {arcEndX.toFixed(2)} {arcEndY.toFixed(2)}"
+        d="M -32.4 32.4 A 45.96 45.96 0 {largeArcFlag} 1 {arcEndX.toFixed(2)} {arcEndY.toFixed(2)}"
         fill="none"
         stroke-width="3"
       />
