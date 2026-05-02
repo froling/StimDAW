@@ -113,6 +113,28 @@ export class MockFirmware {
     return this.state;
   }
 
+  /**
+   * Notifiera voltage-sim om puls-fire från host-sidans emit-stream.
+   * Per BETA_OSCILLOSCOPE.md (eng-review T2): mock simulerar Vcap-dipp
+   * vid varje puls + recovery via existing intensity-baseline-RC-modell.
+   *
+   * Anropas av stores.svelte.ts emit-sink (mixer + pattern-runner) vid
+   * varje dispatched descriptor. wallNowMicros ger oss tids-bas för dipp-
+   * recovery-modell.
+   */
+  onPulseFired(
+    desc: import('../protocol/descriptor').PtDescriptor,
+    _wallNowMicros: number,
+  ): void {
+    // Real firmware ankrar voltage-sim till playState. Host-emit-mode (pattern-
+    // runner / mixer) sätter aldrig playState eftersom vi inte kör Invoke START.
+    // Treat aktiv emit-stream som "playing" så voltage-sim:s RC-modell laddar
+    // mot intensity-target. onPulseFired drar sen ner Vcap per puls och låter
+    // RC-recovery fylla på baseline mellan pulserna.
+    this.voltage.setPlaying(true);
+    this.voltage.onPulseFired(desc);
+  }
+
   private handleBytes(bytes: Uint8Array): void {
     const frames = this.parser.push(bytes);
     for (const frame of frames) {

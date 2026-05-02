@@ -10,22 +10,30 @@ import { loadSettings, saveSettings } from '../fileformat/io';
 import { createLogger } from '../log';
 import { generatePatternDescriptors } from '../patterns/runner';
 import { getPatternByName } from '../patterns/builtins';
-import { type PatternDef, elconId, uniqueElcons } from '../patterns/types';
-import { WaveformGenerator, type WaveformSample } from '../mock-firmware/waveform';
+import type { PatternDef } from '../patterns/types';
 import { exportDispatchedAsCsv } from '../mock-firmware/csv-export';
-import { DispatchedRing } from '../mock-firmware/dispatched-ring';
 import { buildCsvFilename } from './csv-filename';
 import { SynthEngine } from '../synth/synth-engine';
 import { RealtimeClock } from '../synth/clock';
 import { synth, attachEngineHooks } from './synth/synth-store.svelte';
+import { buildFrame } from '../oscilloscope/frame-builder';
+import { buildPolarFrame, type PolarFrame } from '../oscilloscope/polar-frame';
+import { buildEnvelopeFrame, type EnvelopeFrame } from '../oscilloscope/envelope-frame';
+import type { OscilloscopeFrame } from '../oscilloscope/types';
+import type { VoltageSample } from '../oscilloscope/voltage-state';
 
 const log = createLogger('ui-store');
 
 const VOLTAGE_RING_SIZE = 600;
 const DEBUG_LOG_SIZE = 100;
 const RAMP_TICK_MS = 100;
-const WAVEFORM_TICK_MS = 30; // 30ms per design-review lock
-const WAVEFORM_RING_SIZE = 200; // 6s @ 30ms — matchar approved.html
+
+/**
+ * Frame-builder tick rate per BETA_OSCILLOSCOPE.md (eng-review T1 locked):
+ * 30Hz = 33ms. Kapar Svelte-rerender-rate till skärm-refresh oavsett
+ * emit-rate. Frame-builder är pure function; tick är enbart driver.
+ */
+const FRAME_TICK_MS = 33;
 
 export type ConnectionState = 'disconnected' | 'connecting' | 'connected' | 'ramping';
 
@@ -42,7 +50,13 @@ export interface DebugLogEntry {
 class AppState {
   connection = $state<ConnectionState>('disconnected');
   voltages = $state<Voltages>({ Vbat_mV: 0, Vcap_mV: 0, Iprim_mA: 0 });
-  voltageHistory = $state<Voltages[]>([]);
+  /**
+   * Historik av voltage-samples med wall-time-stamp. Drives Monitor-
+   * sparklines (Vbat/Vcap/Iprim) OCH Oscilloscope primary-voltage-trace.
+   * VoltageSample extends Voltages med wallTimeMicros — Monitor läser
+   * samma fält som tidigare (Vbat_mV/Vcap_mV/Iprim_mA) utan ändring.
+   */
+  voltageHistory = $state.raw<VoltageSample[]>([]);
   intensity = $state<number>(0); // last echoed from device
   desiredIntensity = $state<number>(0); // user's slider value
   effectiveIntensity = $state<number>(0); // post-ramp, post-ceiling
@@ -54,44 +68,41 @@ class AppState {
   debugLog = $state<DebugLogEntry[]>([]);
   lastError = $state<string | null>(null);
 
-  // ── α2 — pattern + oscilloscope state ──────────────────────────────────
+  // ── β Oscilloscope state (post BETA_OSCILLOSCOPE.md rewrite) ──────────
   /** Aktivt pattern (null = idle). */
   currentPattern = $state<PatternDef | null>(null);
   isRunningPattern = $state<boolean>(false);
-  /** Per-elconId ringbuffer av samples (för Oscilloscope render). */
-  waveformBuffers = $state<Map<string, WaveformSample[]>>(new Map());
-  /** Aktuellt sim-time µs — driver rolling x-axis, ticks vid 30Hz. */
-  waveformNowMicros = $state<number>(0);
-  /** Vilka elcons som ska visas i oscilloscope (eye toggle). */
-  visibleElcons = $state<Set<string>>(new Set());
   /**
-   * Vilka traces som ritas i Oscilloscope. Två zoner:
-   *   - signed (amp/vcap): biphasic, 0-baseline i mitten av top-charten
-   *   - timing (pulse-width/pace): unsigned, 0-baseline botten av sub-charten
-   * Hardware-bounds: pulse-width 2..200µs, pace 5..62.5ms (firmware burst.h).
+   * Wire-truth-buffer: descriptors host emittat via writePtDescriptor.
+   * `$state.raw` skippar Svelte deep proxy — undviker overhead vid 200Hz
+   * emit-rate (eng-review T1 locked). Mutationer kräver reassign;
+   * frame-builder läser hela arrayen vid 30Hz tick.
    */
-  activeTraces = $state<Set<'amp' | 'vcap' | 'pulse-width' | 'pace'>>(
-    new Set(['amp', 'pulse-width', 'pace']),
-  );
+  dispatchedDescriptors = $state.raw<DispatchedDescriptor[]>([]);
   /**
-   * Host-sidans dispatched-buffer: vad pattern-runnern faktiskt skickade
-   * via writePtDescriptor + förväntad sim-tid (descTime). Capped så vi
-   * inte blåser upp minnet under långa körningar. Driver CSV-export.
-   *
-   * OBS: detta är host-sanning (vad host trodde sig skicka), inte
-   * firmware-sanning. För mock-läge exponerar MockFirmware.getDispatched-
-   * Descriptors() firmware-sidans truth (post-decode, post-enqueue).
-   *
-   * Implementation: privat O(1)-push ringbuffer + throttlad reactive count
-   * (~30Hz). Snapshot ges via getter `dispatchedDescriptors` som läser
-   * count för Svelte-dep-tracking. Tidigare clone-array-per-emit gjorde
-   * 1M ops/s vid 200Hz emit; ringbuffern + throttle ger 30Hz × cap = 150k
-   * ops/s read-side, och O(1) per write.
+   * Stream-time origin (descriptor.startTimeMicros vid första dispatch).
+   * Wall-clock origin (`performance.now()*1000` vid samma moment) för
+   * voltage-history-translation. Båda null tills första dispatch.
+   * PURGE vid runPattern/startMixer start.
    */
-  /** @internal — exponerad bara för test-helpers/debug. Använd dispatchedDescriptors getter. */
-  _dispatchedRing = new DispatchedRing<DispatchedDescriptor>(DISPATCHED_BUFFER_CAP);
-  /** Throttlad reactive trigger — bumpas max ~30Hz från _scheduleDispatchedFlush. */
-  dispatchedCount = $state<number>(0);
+  streamTimeOriginMicros = $state<number | null>(null);
+  streamOriginWallMicros = $state<number | null>(null);
+  /**
+   * Aktuell frame för Oscilloscope-komponenten. Legacy per-puls-format,
+   * behålls tills komponenten tagits bort i nästa pass.
+   */
+  oscilloscopeFrame = $state<OscilloscopeFrame | null>(null);
+  /**
+   * Envelope-frame: per-electrode amplitude-curve över 6s. Visar känsla
+   * (intensity + polaritet) över tid, smooth — inte diskreta pulser.
+   */
+  envelopeFrame = $state<EnvelopeFrame | null>(null);
+  /**
+   * Polar-frame: spatial flow-vy. Arcs mellan + och − elektroder under
+   * senaste 1s med age-fade. Pattern-rörelser (Circle, Toggle) syns
+   * som visuella riktnings-mönster.
+   */
+  polarFrame = $state<PolarFrame | null>(null);
   /**
    * Loop-mode: när true så repeterar runPattern hela pattern-körningen tills
    * stopPattern triggas. Läses i runPattern's do-while-condition och vid
@@ -110,39 +121,6 @@ class AppState {
    * Off by default — minst 40 emits/s från aktiv mixer skulle flooda console.
    */
   logDescriptors = $state<boolean>(false);
-
-  /** @internal — flush-timer för throttlad dispatchedCount-trigger. */
-  private _flushTimer: ReturnType<typeof setTimeout> | null = null;
-
-  /**
-   * Snapshot av ringbuffer i kronologisk ordning. Reactive via dispatchedCount-
-   * dep så $derived/$effect re-evaluerar när nya items kommer (max ~30Hz).
-   */
-  get dispatchedDescriptors(): readonly DispatchedDescriptor[] {
-    void this.dispatchedCount; // dep för Svelte reactivity
-    return this._dispatchedRing.snapshot();
-  }
-
-  /** Push descriptor till ring + schemalägg max-30Hz reactive trigger. O(1). */
-  pushDispatched(d: DispatchedDescriptor): void {
-    this._dispatchedRing.push(d);
-    if (this._flushTimer === null) {
-      this._flushTimer = setTimeout(() => {
-        this._flushTimer = null;
-        this.dispatchedCount = this._dispatchedRing.size;
-      }, 33); // ~30Hz, matchar waveform-tick
-    }
-  }
-
-  /** Clear ring + reset count synkront. Anropas vid run-start och stop. */
-  clearDispatched(): void {
-    this._dispatchedRing.clear();
-    if (this._flushTimer !== null) {
-      clearTimeout(this._flushTimer);
-      this._flushTimer = null;
-    }
-    this.dispatchedCount = 0;
-  }
 }
 
 /** Cap så att en tre-timmars patternrun inte sväller minnet — räcker för dev. */
@@ -188,7 +166,8 @@ export async function connectMock(): Promise<void> {
   watchdog = new StopWatchdog({ timeoutMs: 1000 });
 
   const { client: ct, firmware: ft } = createInMemoryPair();
-  mockFw = new MockFirmware({ realtime: true, voltageEmitIntervalMs: 100 });
+  // 33ms ≈ 30Hz, matchar frame-builder så voltage-trace inte blir chunky
+  mockFw = new MockFirmware({ realtime: true, voltageEmitIntervalMs: 33 });
   mockFw.attach(ft);
   await ft.open();
 
@@ -215,8 +194,17 @@ export async function connectMock(): Promise<void> {
 
   client.on('voltages', (v) => {
     app.voltages = v;
-    app.voltageHistory.push(v);
-    if (app.voltageHistory.length > VOLTAGE_RING_SIZE) app.voltageHistory.shift();
+    const sample: VoltageSample = {
+      Vbat_mV: v.Vbat_mV,
+      Vcap_mV: v.Vcap_mV,
+      Iprim_mA: v.Iprim_mA,
+      wallTimeMicros: performance.now() * 1000,
+    };
+    // $state.raw kräver reassign — append + cap via slice
+    const next = app.voltageHistory.length >= VOLTAGE_RING_SIZE
+      ? [...app.voltageHistory.slice(1), sample]
+      : [...app.voltageHistory, sample];
+    app.voltageHistory = next;
   });
 
   client.on('intensity', (n) => {
@@ -278,7 +266,7 @@ function stopRampLoop(): void {
 
 export async function disconnect(): Promise<void> {
   stopRampLoop();
-  stopWaveformLoop();
+  stopFrameTimer();
   if (patternRunCancel) patternRunCancel.cancelled = true;
   // Stop synth-engine annars fortsätter pending events fire (sink no-op:ar
   // utan client) och app.isMixerRunning förblir true → UI visar "running"
@@ -356,56 +344,110 @@ export async function reconnectMock(): Promise<void> {
 }
 
 // ──────────────────────────────────────────────────────────────────────────
-// α2 — Pattern runner + waveform shadow render
+// β Oscilloscope — frame-builder pipeline
+//
+// Per BETA_OSCILLOSCOPE.md (eng-review locked 2026-05-02):
+//   - Frame-timer kör vid 30Hz, oberoende av emit-rate
+//   - Emit-sink lägger till app.dispatchedDescriptors (pendingDispatched för
+//     batchad reassign med $state.raw)
+//   - Frame-timer drainar pendingDispatched, anropar buildFrame, sätter
+//     app.oscilloscopeFrame
+//   - Stream-origin sätts vid första dispatch, PURGE vid stream-start
+//   - Ingen waveform-shadow-render, ingen sample-tick — Vcap från
+//     real telemetri via voltageHistory
 // ──────────────────────────────────────────────────────────────────────────
 
-let waveformGen: WaveformGenerator | null = null;
-let waveformLoopHandle: ReturnType<typeof setInterval> | null = null;
+let frameTimerHandle: ReturnType<typeof setInterval> | null = null;
 let patternRunCancel: { cancelled: boolean } | null = null;
 
-function startWaveformLoop(): void {
-  if (waveformLoopHandle !== null) return;
-  if (!waveformGen) waveformGen = new WaveformGenerator();
-  waveformLoopHandle = setInterval(() => {
-    if (!waveformGen) return;
-    const nowMicros = performance.now() * 1000;
-    // Update reactive "now" så Oscilloscope kan rolla X-axeln även när
-    // inga active descriptors finns (samples-array kan vara tom).
-    app.waveformNowMicros = nowMicros;
+/**
+ * Pending dispatched-buffer. Emit-sink push:ar hit synchronously vid 200Hz.
+ * Frame-timer drainar var 33ms (60-100x per sec) och reassign:ar till
+ * app.dispatchedDescriptors ($state.raw så ingen deep-proxy-overhead).
+ */
+const pendingDispatched: DispatchedDescriptor[] = [];
 
-    const rampPercent = ramp?.snapshot(performance.now()).effective ?? 0;
-    const ceilingPercent = ceiling?.get() ?? app.ceiling;
-    const samples = waveformGen.sample(nowMicros, { rampPercent, ceilingPercent });
-
-    if (samples.length === 0) return;
-
-    // Push samples till ringbuffer per elcon — Map mutation
-    const next = new Map(app.waveformBuffers);
-    for (const sample of samples) {
-      let buf = next.get(sample.elconId);
-      if (!buf) {
-        buf = [];
-      } else {
-        buf = buf.slice(); // copy för immutability
-      }
-      buf.push(sample);
-      if (buf.length > WAVEFORM_RING_SIZE) buf.shift();
-      next.set(sample.elconId, buf);
-    }
-    app.waveformBuffers = next;
-  }, WAVEFORM_TICK_MS);
+function startFrameTimer(): void {
+  if (frameTimerHandle !== null) return;
+  frameTimerHandle = setInterval(runFrameTick, FRAME_TICK_MS);
 }
 
-function stopWaveformLoop(): void {
-  if (waveformLoopHandle !== null) {
-    clearInterval(waveformLoopHandle);
-    waveformLoopHandle = null;
+function stopFrameTimer(): void {
+  if (frameTimerHandle !== null) {
+    clearInterval(frameTimerHandle);
+    frameTimerHandle = null;
+  }
+  pendingDispatched.length = 0;
+}
+
+function runFrameTick(): void {
+  // 1. Drain pendingDispatched → app.dispatchedDescriptors
+  if (pendingDispatched.length > 0) {
+    const next = app.dispatchedDescriptors.length > 0
+      ? [...app.dispatchedDescriptors, ...pendingDispatched]
+      : [...pendingDispatched];
+    if (next.length > DISPATCHED_BUFFER_CAP) {
+      next.splice(0, next.length - DISPATCHED_BUFFER_CAP);
+    }
+    app.dispatchedDescriptors = next;
+    pendingDispatched.length = 0;
+  }
+
+  // 2. Bygg ny frame om vi har stream-origin
+  if (
+    app.streamTimeOriginMicros === null ||
+    app.streamOriginWallMicros === null
+  ) {
+    // Ingen aktiv stream — bevarar senaste frame om sådan finns, annars null
+    return;
+  }
+  const wallNow = performance.now() * 1000;
+  const streamNow = wallNow - app.streamOriginWallMicros;
+  const inputs = {
+    dispatched: app.dispatchedDescriptors,
+    voltageHistory: app.voltageHistory,
+    streamOriginMicros: app.streamTimeOriginMicros,
+    streamOriginWallMicros: app.streamOriginWallMicros,
+    streamNowMicros: streamNow,
+  };
+  app.oscilloscopeFrame = buildFrame(inputs);
+  app.envelopeFrame = buildEnvelopeFrame(inputs);
+  app.polarFrame = buildPolarFrame(inputs);
+}
+
+/**
+ * Anropas av emit-sinks (pattern-runner + synth-engine). Sätter origin
+ * vid första dispatch, push:ar till pendingDispatched för frame-tick-drain.
+ */
+function recordDispatch(desc: { phase: number; startTimeMicros: number }, fullDispatch: DispatchedDescriptor): void {
+  if (app.streamTimeOriginMicros === null) {
+    app.streamTimeOriginMicros = desc.startTimeMicros;
+    app.streamOriginWallMicros = fullDispatch.dispatchedAtMicros;
+  }
+  pendingDispatched.push(fullDispatch);
+  if (pendingDispatched.length > DISPATCHED_BUFFER_CAP) {
+    pendingDispatched.splice(0, pendingDispatched.length - DISPATCHED_BUFFER_CAP);
   }
 }
 
 /**
- * Run named pattern. Genererar descriptors host-side, skickar via NeoDKClient,
- * shadow-renderar lokalt i WaveformGenerator för Oscilloscope.
+ * PURGE vid stream-start. Eng-review locked: löser origin-reset-inkonsistens
+ * genom att rensa buffer + null:a origin samtidigt. Frame återskapas vid
+ * första nya dispatch.
+ */
+function purgeOscilloscopeState(): void {
+  app.dispatchedDescriptors = [];
+  pendingDispatched.length = 0;
+  app.streamTimeOriginMicros = null;
+  app.streamOriginWallMicros = null;
+  app.oscilloscopeFrame = null;
+  app.envelopeFrame = null;
+  app.polarFrame = null;
+}
+
+/**
+ * Run named pattern. Genererar descriptors host-side, skickar via NeoDKClient.
+ * Oscilloscope renderar via frame-builder från `app.dispatchedDescriptors`.
  */
 export async function runPattern(patternName: string): Promise<void> {
   if (!client) {
@@ -430,38 +472,18 @@ export async function runPattern(patternName: string): Promise<void> {
     text: `Run pattern "${pattern.name}" (${pattern.elcons.length} elcons, ${pattern.nrOfReps} reps)`,
   });
 
-  // Auto-show alla unika elcons i pattern
-  const visibleSet = new Set<string>();
-  for (const elcon of uniqueElcons(pattern.elcons)) {
-    visibleSet.add(elconId(elcon));
-  }
-  app.visibleElcons = visibleSet;
-
-  // Reset waveform-gen + dispatched-buffer för clean run
-  if (!waveformGen) waveformGen = new WaveformGenerator();
-  waveformGen.reset();
-  app.waveformBuffers = new Map();
-  app.clearDispatched();
-  startWaveformLoop();
+  // PURGE oscilloscope-state + start frame-timer för clean run
+  purgeOscilloscopeState();
+  startFrameTimer();
 
   const cancel = { cancelled: false };
   patternRunCancel = cancel;
 
   try {
-    // Cumulativa state-variabler för descriptor-stream-continuity över
-    // loop-iterations: descriptor.startTimeMicros och sequenceNumber måste
-    // vara monotont stigande så mock-firmware:s SimClock-scheduling och
-    // firmware-sidans seq-tracking funkar korrekt över loop-gränser.
     let cumulativeStartTimeMicros = 0;
     let cumulativeSeqNr = 0;
 
     do {
-      // Per-iteration rep-cap. Loop-läge använder 1 rep så repetitionen
-      // syns tätt; one-shot använder upp till 5 reps för längre play
-      // utan att man måste hålla i Stop. Bypassad cap (= pattern.nrOfReps)
-      // ger 15+ min/iter på Toggle 300× → man tror loopen är trasig.
-      // Re-evalueras per iter så toggle av checkbox under körning tar
-      // effekt på nästa iteration.
       const maxReps = app.loopPattern
         ? Math.min(1, pattern.nrOfReps)
         : Math.min(5, pattern.nrOfReps);
@@ -478,22 +500,18 @@ export async function runPattern(patternName: string): Promise<void> {
           cancel.cancelled = true;
           break;
         }
-        // Use real wall time (performance.now) för host-side waveform-gen
-        // OCH dispatched-buffer. Tidigare användes en aritmetisk descTime
-        // som drev iväg från real wall clock över tid (browser-sleep har
-        // jitter, sleeps är typ 2ms längre än begärt → drift ackumulerar
-        // över ~14 iterations till > descriptor-duration → waveform-gen
-        // dropar samples direkt eftersom endTime ser ut att ha passerats).
         const enqueueAtMicros = performance.now() * 1000;
-        waveformGen.enqueueDescriptor(desc, enqueueAtMicros);
-        // Track för CSV-export — ringbuffer O(1)-push, throttlad reactive trigger.
-        // queueIdx härleds från phase-bit (samma som firmware).
         const queueIdx = (desc.phase & 0x01) as 0 | 1;
-        app.pushDispatched({ descriptor: desc, dispatchedAtMicros: enqueueAtMicros, queueIdx });
+        recordDispatch(desc, {
+          descriptor: desc,
+          dispatchedAtMicros: enqueueAtMicros,
+          queueIdx,
+        });
+        // Notifiera mock-firmware:s voltage-sim om puls-fire (samma som mixer sink)
+        mockFw?.onPulseFired?.(desc, enqueueAtMicros);
         const durationMicros = desc.nrOfPulses * desc.paceQuarterMs * 250;
         cumulativeStartTimeMicros = desc.startTimeMicros + durationMicros;
         cumulativeSeqNr = (desc.sequenceNumber + 1) & 0xff;
-        // Vänta så pattern playas i realtid (annars firar alla descriptors instant)
         await sleep(durationMicros / 1000);
       }
     } while (app.loopPattern && !cancel.cancelled);
@@ -504,32 +522,13 @@ export async function runPattern(patternName: string): Promise<void> {
   }
 }
 
-/** Stop currently-running pattern. Cancels the run loop, drains waveform-gen. */
+/** Stop currently-running pattern. Cancels the run loop. Frame-timer fortsätter. */
 export function stopPattern(): void {
   if (patternRunCancel) {
     patternRunCancel.cancelled = true;
   }
   app.isRunningPattern = false;
-  waveformGen?.reset();
   pushDebugLog({ ts: Date.now(), direction: 'system', text: 'Pattern stopped' });
-}
-
-/** Toggle visibility of a single elcon row in oscilloscope. */
-export function toggleElconVisibility(eId: string): void {
-  const next = new Set(app.visibleElcons);
-  if (next.has(eId)) next.delete(eId);
-  else next.add(eId);
-  app.visibleElcons = next;
-}
-
-/** Toggle a trace on/off across all rows. */
-export function toggleTrace(
-  trace: 'amp' | 'vcap' | 'pulse-width' | 'pace',
-): void {
-  const next = new Set(app.activeTraces);
-  if (next.has(trace)) next.delete(trace);
-  else next.add(trace);
-  app.activeTraces = next;
 }
 
 // Re-export så UI kan importera från en plats; pure-helper bor i csv-filename.ts
@@ -543,13 +542,16 @@ export { buildCsvFilename };
  * Returnerar null om buffern är tom — UI ska disable knappen då.
  */
 export function buildDispatchedCsv(now: Date = new Date()): { filename: string; csv: string } | null {
-  // Direkt ring-läs (skippar throttlad reactive count) så snapshot är fresh
-  // även om user klickar Export precis efter senaste push.
-  const snapshot = app._dispatchedRing.snapshot();
-  if (snapshot.length === 0) return null;
+  // Frame-tickern reassign:ar app.dispatchedDescriptors var 33ms; om user
+  // klickar Export mellan tickar finns senaste pulser i pendingDispatched.
+  // Inkludera dem i snapshot så CSV alltid är komplett up-to-the-moment.
+  const tail = pendingDispatched.length > 0
+    ? [...app.dispatchedDescriptors, ...pendingDispatched]
+    : app.dispatchedDescriptors;
+  if (tail.length === 0) return null;
   return {
     filename: buildCsvFilename(app.currentPattern?.name, now),
-    csv: exportDispatchedAsCsv(snapshot),
+    csv: exportDispatchedAsCsv(tail),
   };
 }
 
@@ -575,7 +577,7 @@ export function exportDispatchedCsv(): void {
   pushDebugLog({
     ts: Date.now(),
     direction: 'system',
-    text: `Export CSV: ${built.filename} (${app._dispatchedRing.size} descriptors)`,
+    text: `Export CSV: ${built.filename} (${app.dispatchedDescriptors.length + pendingDispatched.length} descriptors)`,
   });
 }
 
@@ -645,25 +647,27 @@ function logDescriptorEmit(desc: import('../protocol/descriptor').PtDescriptor):
 }
 
 /**
- * Lazy-init synth-engine på first start. RealtimeClock i prod, sink går till
- * client.writePtDescriptor + waveform-gen-shadow + dispatched-buffer (samma
- * pattern som α2 runPattern men event-driven istället för for-await-loop).
+ * Lazy-init synth-engine på first start. RealtimeClock i prod, sink skickar
+ * via client.writePtDescriptor + recordDispatch (frame-builder läser från
+ * app.dispatchedDescriptors).
  */
 function ensureSynthEngine(): SynthEngine {
   if (synthEngine) return synthEngine;
-  if (!waveformGen) waveformGen = new WaveformGenerator();
   synthEngine = new SynthEngine({
     clock: new RealtimeClock(),
     getState: () => synth.current,
     sink: (desc) => {
       if (!client) return;
       void client.writePtDescriptor(desc).catch((e) => log.warn('writePtDescriptor failed:', e));
-      // Shadow-render för Oscilloscope (host-side, samma som α2 runPattern)
       const wallNow = performance.now() * 1000;
-      waveformGen?.enqueueDescriptor(desc, wallNow);
-      // Dispatched-buffer för CSV-export — O(1)-push till ringbuffer.
       const queueIdx = (desc.phase & 0x01) as 0 | 1;
-      app.pushDispatched({ descriptor: desc, dispatchedAtMicros: wallNow, queueIdx });
+      recordDispatch(desc, {
+        descriptor: desc,
+        dispatchedAtMicros: wallNow,
+        queueIdx,
+      });
+      // Notifiera mock-firmware:s voltage-sim om puls-fire för Vcap-dipp
+      mockFw?.onPulseFired?.(desc, wallNow);
       // Optional debug-log per descriptor (gated på app.logDescriptors toggle)
       logDescriptorEmit(desc);
     },
@@ -684,18 +688,10 @@ export function startMixer(): void {
     return;
   }
   if (app.isMixerRunning) return;
-  // Reset waveform-shadow + dispatched-buffer för clean run
-  if (!waveformGen) waveformGen = new WaveformGenerator();
-  waveformGen.reset();
-  app.waveformBuffers = new Map();
-  app.clearDispatched();
-  // Auto-show alla unika elcons från mixer-channels i Oscilloscope
-  const visibleSet = new Set<string>();
-  for (const ch of synth.current.channels) {
-    visibleSet.add(elconId(ch.elcon));
-  }
-  app.visibleElcons = visibleSet;
-  startWaveformLoop();
+
+  // PURGE oscilloscope-state + start frame-timer för clean run
+  purgeOscilloscopeState();
+  startFrameTimer();
 
   const engine = ensureSynthEngine();
   engine.start();
@@ -712,9 +708,8 @@ export function stopMixer(): void {
     synthEngine.stop();
   }
   app.isMixerRunning = false;
-  // Drain waveform-shadow så stale samples inte ligger kvar i Oscilloscope-
-  // buffer (matchar stopPattern beteende).
-  waveformGen?.reset();
+  // Frame-tickern fortsätter köra så Oscilloscope håller kvar senaste frame.
+  // Ingen waveform-gen att resetta — frame-builder-pipeline ersatte den.
   pushDebugLog({ ts: Date.now(), direction: 'system', text: 'Mixer stopped' });
   // Flush ev. ackumulerad summary direkt vid stop
   if (emitSummary.flushTimer !== null) {

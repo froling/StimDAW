@@ -22,6 +22,7 @@ import * as appStore from '../ui/stores.svelte';
 import { ElectrodeMask, type Elcon } from '../patterns/types';
 import type { MixerState, WaveShape } from '../synth/types';
 import type { DispatchedDescriptor } from '../mock-firmware/firmware';
+import type { OscilloscopeFrame } from '../oscilloscope/types';
 
 export interface TestHelpers {
   /** Version-marker så test-skript kan checka API-kompat. */
@@ -35,6 +36,18 @@ export interface TestHelpers {
   getIsPatternRunning(): boolean;
   getDispatchedDescriptors(): readonly DispatchedDescriptor[];
   getDispatchedCount(): number;
+  /** Aktuell Oscilloscope-frame (β post-rewrite). null innan första dispatch. */
+  getOscilloscopeFrame(): OscilloscopeFrame | null;
+  /** Antal pulser per electrode-rad (A/B/C/D) i aktuell frame — diagnostik. */
+  getElectrodePulseCounts(): {
+    A: number;
+    B: number;
+    C: number;
+    D: number;
+    total: number;
+  };
+  /** Polaritets-distribution över alla electrode-rader i aktuell frame. */
+  getPolarityStats(): { pos: number; neg: number; total: number };
 
   // ── Mixer actions (delegate till synth-store) ──────────────────
   addChannel(pos?: number, neg?: number): string;
@@ -93,7 +106,34 @@ export function installTestHelpers(): void {
     getIsMixerRunning: () => appStore.app.isMixerRunning,
     getIsPatternRunning: () => appStore.app.isRunningPattern,
     getDispatchedDescriptors: () => appStore.app.dispatchedDescriptors,
-    getDispatchedCount: () => appStore.app.dispatchedCount,
+    getDispatchedCount: () => appStore.app.dispatchedDescriptors.length,
+    getOscilloscopeFrame: () => appStore.app.oscilloscopeFrame,
+    getElectrodePulseCounts: () => {
+      const frame = appStore.app.oscilloscopeFrame;
+      if (!frame) return { A: 0, B: 0, C: 0, D: 0, total: 0 };
+      const counts: { A: number; B: number; C: number; D: number; total: number } = {
+        A: 0, B: 0, C: 0, D: 0, total: 0,
+      };
+      for (const row of frame.electrodeRows) {
+        const n = row.pulses.length;
+        counts[row.electrode] = n;
+        counts.total += n;
+      }
+      return counts;
+    },
+    getPolarityStats: () => {
+      const frame = appStore.app.oscilloscopeFrame;
+      if (!frame) return { pos: 0, neg: 0, total: 0 };
+      let pos = 0;
+      let neg = 0;
+      for (const row of frame.electrodeRows) {
+        for (const p of row.pulses) {
+          if (p.polarity === 'pos') pos++;
+          else neg++;
+        }
+      }
+      return { pos, neg, total: pos + neg };
+    },
 
     addChannel: (pos = ElectrodeMask.A, neg = ElectrodeMask.C) => {
       const before = synthStore.synth.current.channels.length;
@@ -138,8 +178,12 @@ export function installTestHelpers(): void {
 
     flush: () =>
       new Promise<void>((resolve) => {
-        // Två microtask-hops så Svelte $derived/$effect hinner reagera
-        queueMicrotask(() => queueMicrotask(() => resolve()));
+        // β.0 fix-2026-05: vänta på rAF eftersom waveform/dispatched batchas
+        // genom requestAnimationFrame istället för direkt $state-mutation.
+        // Två microtask-hops efter rAF så Svelte $derived/$effect hinner reagera.
+        requestAnimationFrame(() => {
+          queueMicrotask(() => queueMicrotask(() => resolve()));
+        });
       }),
 
     snapshot: () => ({
@@ -147,7 +191,7 @@ export function installTestHelpers(): void {
       activeSource: synthStore.synth.activeSource,
       connection: appStore.app.connection,
       isMixerRunning: appStore.app.isMixerRunning,
-      dispatchedCount: appStore.app.dispatchedCount,
+      dispatchedCount: appStore.app.dispatchedDescriptors.length,
     }),
   };
 

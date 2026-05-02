@@ -9,10 +9,18 @@
  * enforcas vid enqueue() som belt-and-suspenders. Builder validerar redan,
  * detta är defense in depth.
  *
+ * Per NeoDK-context-update 2026-05-02: switch matrix har 4 fasta opto-triacs
+ * (U4-U7). A och C delar T+ wiring, B och D delar T− wiring. Endast 9 elcon-
+ * konfigurationer är fysiskt giltiga. Vi rejectar invalid elcons här som
+ * defense-in-depth — riktig firmware skulle silent-misroute.
+ *
  * Overflow: tyst drop + log warn (per spec PE_BUFFER_FULL). Host ska tracka
  * pending-tid och inte överbelasta — overflow indikerar bug.
  */
 import type { PtDescriptor } from '../protocol/descriptor';
+import type { Elcon } from '../patterns/types';
+import { isElconHardwareValid } from '../patterns/validate';
+import { elconToLabel } from '../patterns/types';
 import { createLogger } from '../log';
 
 const log = createLogger('pt-queue');
@@ -26,6 +34,15 @@ export class ShortCircuitError extends Error {
       `Short circuit: electrodeSet pos & neg overlap (pos=${pos}, neg=${neg}, intersect=${pos & neg})`,
     );
     this.name = 'ShortCircuitError';
+  }
+}
+
+export class HardwareInvalidElconError extends Error {
+  constructor(pos: number, neg: number) {
+    super(
+      `Hardware-invalid elcon ${elconToLabel([pos, neg] as Elcon)}: A and C share T+ wiring (U4/U6), B and D share T− wiring (U5/U7). One side must be subset of {A,C}, other subset of {B,D}. (pos=${pos}, neg=${neg})`,
+    );
+    this.name = 'HardwareInvalidElconError';
   }
 }
 
@@ -55,6 +72,9 @@ export class PtQueue {
     const [pos, neg] = descriptor.electrodeSet;
     if ((pos & neg) !== 0) {
       throw new ShortCircuitError(pos, neg);
+    }
+    if (!isElconHardwareValid([pos, neg] as Elcon)) {
+      throw new HardwareInvalidElconError(pos, neg);
     }
     const queueIdx = descriptor.phase & 0x01;
     const queue = this.queues[queueIdx]!;

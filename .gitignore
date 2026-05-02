@@ -16,3 +16,4 @@ Thumbs.db
 
 # Per-user Claude Code state (not project config)
 .claude/settings.local.json
+.gstack/

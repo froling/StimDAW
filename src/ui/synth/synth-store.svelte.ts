@@ -65,6 +65,10 @@ export function setChannelEnabled(channelId: string, enabled: boolean): void {
   if (enabled) engineHooks?.ensureChannelScheduled(channelId);
 }
 
+export function setChannelElcon(channelId: string, elcon: Elcon): void {
+  synth.current = state.setChannelElcon(synth.current, channelId, elcon);
+}
+
 // ── LFO actions ────────────────────────────────────────────────────
 
 export function addLfo(shape: WaveShape = 'sine'): void {

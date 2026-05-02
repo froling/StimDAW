@@ -67,7 +67,7 @@ class MixerRig {
 test('GAP-B CRITICAL: stopMixer drainar pending events, ingen late dispatch (safety)', () => {
   // Build state: 1 channel, default pace 25ms
   let s = emptyState();
-  s = addChannel(s, [ElectrodeMask.A, ElectrodeMask.C]);
+  s = addChannel(s, [ElectrodeMask.A, ElectrodeMask.B]);
   const rig = new MixerRig(s);
 
   // Start engine, kör 100ms (5 emits at 25ms pace incl initial vid 0)
@@ -152,7 +152,7 @@ test('Multi-channel: olika pace ger interleaved emit-pattern', () => {
 test('LFO modulerar pulse_width över hela period', () => {
   let s = emptyState();
   s = addLfo(s); // sine 1Hz
-  s = addChannel(s, [ElectrodeMask.A, ElectrodeMask.C]);
+  s = addChannel(s, [ElectrodeMask.A, ElectrodeMask.B]);
   // High pace så vi får få samples per LFO-cycle (cleaner test-data)
   const chId = s.channels[0]!.id;
   s = {
@@ -181,7 +181,7 @@ test('LFO modulerar pulse_width över hela period', () => {
 test('Cable removal: knob reverts till base-värde', () => {
   let s = emptyState();
   s = addLfo(s);
-  s = addChannel(s, [ElectrodeMask.A, ElectrodeMask.C]);
+  s = addChannel(s, [ElectrodeMask.A, ElectrodeMask.B]);
   s = addCable(s, s.lfos[0]!.id, s.channels[0]!.id, 'pulseWidth', 1.0);
   const cableId = s.cables[0]!.id;
   const rig = new MixerRig(s);
@@ -208,7 +208,7 @@ test('Multi-LFO: rate-change på LFO A påverkar inte cable LFO B → channel C'
   let s = emptyState();
   s = addLfo(s); // LFO A, 1Hz
   s = addLfo(s); // LFO B, 1Hz
-  s = addChannel(s, [ElectrodeMask.A, ElectrodeMask.C]); // ch C — only modulated by B
+  s = addChannel(s, [ElectrodeMask.A, ElectrodeMask.B]); // ch C — only modulated by B
   const chId = s.channels[0]!.id;
   // High pace för cleaner data
   s = {
@@ -246,8 +246,8 @@ test('Multi-LFO: rate-change på LFO A påverkar inte cable LFO B → channel C'
 
 test('GAP-A regression: per-channel phase-flip kvarstår vid multi-channel', () => {
   let s = emptyState();
-  s = addChannel(s, [ElectrodeMask.A, ElectrodeMask.C]);
-  s = addChannel(s, [ElectrodeMask.B, ElectrodeMask.D]);
+  s = addChannel(s, [ElectrodeMask.A, ElectrodeMask.B]);
+  s = addChannel(s, [ElectrodeMask.C, ElectrodeMask.D]); // valid: C∈{A,C}, D∈{B,D}
   const rig = new MixerRig(s);
   rig.engine.start();
   rig.clock.advance(100_000); // 4 emits per channel
@@ -256,7 +256,7 @@ test('GAP-A regression: per-channel phase-flip kvarstår vid multi-channel', () 
     .filter((d) => d.electrodeSet[0] === ElectrodeMask.A)
     .map((d) => d.phase);
   const ch2Phases = rig.emitted
-    .filter((d) => d.electrodeSet[0] === ElectrodeMask.B)
+    .filter((d) => d.electrodeSet[0] === ElectrodeMask.C)
     .map((d) => d.phase);
 
   // Båda channels alternates 0,1,0,1 (per-channel state, inte global)

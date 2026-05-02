@@ -1,7 +1,13 @@
 <script lang="ts">
   import Knob from './Knob.svelte';
-  import { updateKnobBase, setChannelEnabled, removeChannel } from './synth-store.svelte';
-  import { elconToLabel } from '../../patterns/types';
+  import ElconPicker from './ElconPicker.svelte';
+  import {
+    updateKnobBase,
+    setChannelEnabled,
+    removeChannel,
+    setChannelElcon,
+  } from './synth-store.svelte';
+  import { elconToLabel, type Elcon } from '../../patterns/types';
   import {
     PULSE_WIDTH_BOUNDS,
     PACE_BOUNDS,
@@ -40,6 +46,10 @@
       removeChannel(channel.id);
     }
   }
+
+  function onElconChange(next: Elcon): void {
+    setChannelElcon(channel.id, next);
+  }
 </script>
 
 <div
@@ -58,12 +68,12 @@
     >
       {channel.enabled ? '●' : '○'}
     </button>
-    <span class="elcon-label">{elconToLabel(channel.elcon)}</span>
+    <ElconPicker value={channel.elcon} onChange={onElconChange} />
     <button
       class="remove-btn"
       onclick={onRemove}
       title="Remove channel"
-      aria-label="Remove channel"
+      aria-label={`Remove channel ${elconToLabel(channel.elcon)}`}
     >×</button>
   </div>
 
@@ -145,24 +155,28 @@
 
   .channel-header {
     display: flex;
-    align-items: center;
+    /* Top-align så enable-toggle + × sitter intill T+ raden, inte
+       floatar mellan T+ och T− raderna. */
+    align-items: flex-start;
     gap: 0.4rem;
     padding-bottom: 0.4rem;
     border-bottom: 1px solid #f0f0f0;
   }
   .enable-toggle {
-    width: 18px;
-    height: 18px;
+    /* Match chip-höjd (22px) för cleaner alignment med T+ raden */
+    width: 22px;
+    height: 22px;
     border-radius: 50%;
     border: 1px solid #ccc;
     background: white;
     color: #ccc;
-    font-size: 0.6rem;
+    font-size: 0.7rem;
     cursor: pointer;
     display: inline-flex;
     align-items: center;
     justify-content: center;
     padding: 0;
+    flex-shrink: 0;
   }
   .enable-toggle.on {
     border-color: #66bb66;
@@ -177,11 +191,13 @@
     letter-spacing: 0.02em;
   }
   .remove-btn {
-    width: 18px;
-    height: 18px;
+    /* Match chip-höjd så × hamnar level med T+ raden, inte midjan */
+    width: 22px;
+    height: 22px;
     padding: 0;
     border: none;
     background: transparent;
+    flex-shrink: 0;
     color: #aaa;
     font-size: 1rem;
     cursor: pointer;
