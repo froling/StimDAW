@@ -13,10 +13,11 @@ import { getPatternByName } from '../patterns/builtins';
 import { type PatternDef, elconId, uniqueElcons } from '../patterns/types';
 import { WaveformGenerator, type WaveformSample } from '../mock-firmware/waveform';
 import { exportDispatchedAsCsv } from '../mock-firmware/csv-export';
+import { DispatchedRing } from '../mock-firmware/dispatched-ring';
 import { buildCsvFilename } from './csv-filename';
 import { SynthEngine } from '../synth/synth-engine';
 import { RealtimeClock } from '../synth/clock';
-import { synth } from './synth/synth-store.svelte';
+import { synth, attachEngineHooks } from './synth/synth-store.svelte';
 
 const log = createLogger('ui-store');
 
@@ -80,8 +81,17 @@ class AppState {
    * OBS: detta är host-sanning (vad host trodde sig skicka), inte
    * firmware-sanning. För mock-läge exponerar MockFirmware.getDispatched-
    * Descriptors() firmware-sidans truth (post-decode, post-enqueue).
+   *
+   * Implementation: privat O(1)-push ringbuffer + throttlad reactive count
+   * (~30Hz). Snapshot ges via getter `dispatchedDescriptors` som läser
+   * count för Svelte-dep-tracking. Tidigare clone-array-per-emit gjorde
+   * 1M ops/s vid 200Hz emit; ringbuffern + throttle ger 30Hz × cap = 150k
+   * ops/s read-side, och O(1) per write.
    */
-  dispatchedDescriptors = $state<DispatchedDescriptor[]>([]);
+  /** @internal — exponerad bara för test-helpers/debug. Använd dispatchedDescriptors getter. */
+  _dispatchedRing = new DispatchedRing<DispatchedDescriptor>(DISPATCHED_BUFFER_CAP);
+  /** Throttlad reactive trigger — bumpas max ~30Hz från _scheduleDispatchedFlush. */
+  dispatchedCount = $state<number>(0);
   /**
    * Loop-mode: när true så repeterar runPattern hela pattern-körningen tills
    * stopPattern triggas. Läses i runPattern's do-while-condition och vid
@@ -100,6 +110,39 @@ class AppState {
    * Off by default — minst 40 emits/s från aktiv mixer skulle flooda console.
    */
   logDescriptors = $state<boolean>(false);
+
+  /** @internal — flush-timer för throttlad dispatchedCount-trigger. */
+  private _flushTimer: ReturnType<typeof setTimeout> | null = null;
+
+  /**
+   * Snapshot av ringbuffer i kronologisk ordning. Reactive via dispatchedCount-
+   * dep så $derived/$effect re-evaluerar när nya items kommer (max ~30Hz).
+   */
+  get dispatchedDescriptors(): readonly DispatchedDescriptor[] {
+    void this.dispatchedCount; // dep för Svelte reactivity
+    return this._dispatchedRing.snapshot();
+  }
+
+  /** Push descriptor till ring + schemalägg max-30Hz reactive trigger. O(1). */
+  pushDispatched(d: DispatchedDescriptor): void {
+    this._dispatchedRing.push(d);
+    if (this._flushTimer === null) {
+      this._flushTimer = setTimeout(() => {
+        this._flushTimer = null;
+        this.dispatchedCount = this._dispatchedRing.size;
+      }, 33); // ~30Hz, matchar waveform-tick
+    }
+  }
+
+  /** Clear ring + reset count synkront. Anropas vid run-start och stop. */
+  clearDispatched(): void {
+    this._dispatchedRing.clear();
+    if (this._flushTimer !== null) {
+      clearTimeout(this._flushTimer);
+      this._flushTimer = null;
+    }
+    this.dispatchedCount = 0;
+  }
 }
 
 /** Cap så att en tre-timmars patternrun inte sväller minnet — räcker för dev. */
@@ -237,6 +280,12 @@ export async function disconnect(): Promise<void> {
   stopRampLoop();
   stopWaveformLoop();
   if (patternRunCancel) patternRunCancel.cancelled = true;
+  // Stop synth-engine annars fortsätter pending events fire (sink no-op:ar
+  // utan client) och app.isMixerRunning förblir true → UI visar "running"
+  // i evighet efter disconnect.
+  synthEngine?.stop();
+  app.isMixerRunning = false;
+  synthEngine = null;
   await client?.disconnect();
   mockFw?.detach();
   client = null;
@@ -392,7 +441,7 @@ export async function runPattern(patternName: string): Promise<void> {
   if (!waveformGen) waveformGen = new WaveformGenerator();
   waveformGen.reset();
   app.waveformBuffers = new Map();
-  app.dispatchedDescriptors = [];
+  app.clearDispatched();
   startWaveformLoop();
 
   const cancel = { cancelled: false };
@@ -437,15 +486,10 @@ export async function runPattern(patternName: string): Promise<void> {
         // dropar samples direkt eftersom endTime ser ut att ha passerats).
         const enqueueAtMicros = performance.now() * 1000;
         waveformGen.enqueueDescriptor(desc, enqueueAtMicros);
-        // Track för CSV-export — ringbuffer-cap så långa körningar inte blåser
-        // upp minnet. queueIdx härleds från phase-bit (samma som firmware).
+        // Track för CSV-export — ringbuffer O(1)-push, throttlad reactive trigger.
+        // queueIdx härleds från phase-bit (samma som firmware).
         const queueIdx = (desc.phase & 0x01) as 0 | 1;
-        const next = app.dispatchedDescriptors.slice();
-        next.push({ descriptor: desc, dispatchedAtMicros: enqueueAtMicros, queueIdx });
-        if (next.length > DISPATCHED_BUFFER_CAP) {
-          next.splice(0, next.length - DISPATCHED_BUFFER_CAP);
-        }
-        app.dispatchedDescriptors = next;
+        app.pushDispatched({ descriptor: desc, dispatchedAtMicros: enqueueAtMicros, queueIdx });
         const durationMicros = desc.nrOfPulses * desc.paceQuarterMs * 250;
         cumulativeStartTimeMicros = desc.startTimeMicros + durationMicros;
         cumulativeSeqNr = (desc.sequenceNumber + 1) & 0xff;
@@ -499,11 +543,13 @@ export { buildCsvFilename };
  * Returnerar null om buffern är tom — UI ska disable knappen då.
  */
 export function buildDispatchedCsv(now: Date = new Date()): { filename: string; csv: string } | null {
-  if (app.dispatchedDescriptors.length === 0) return null;
-  const csv = exportDispatchedAsCsv(app.dispatchedDescriptors);
+  // Direkt ring-läs (skippar throttlad reactive count) så snapshot är fresh
+  // även om user klickar Export precis efter senaste push.
+  const snapshot = app._dispatchedRing.snapshot();
+  if (snapshot.length === 0) return null;
   return {
     filename: buildCsvFilename(app.currentPattern?.name, now),
-    csv,
+    csv: exportDispatchedAsCsv(snapshot),
   };
 }
 
@@ -529,7 +575,7 @@ export function exportDispatchedCsv(): void {
   pushDebugLog({
     ts: Date.now(),
     direction: 'system',
-    text: `Export CSV: ${built.filename} (${app.dispatchedDescriptors.length} descriptors)`,
+    text: `Export CSV: ${built.filename} (${app._dispatchedRing.size} descriptors)`,
   });
 }
 
@@ -615,19 +661,19 @@ function ensureSynthEngine(): SynthEngine {
       // Shadow-render för Oscilloscope (host-side, samma som α2 runPattern)
       const wallNow = performance.now() * 1000;
       waveformGen?.enqueueDescriptor(desc, wallNow);
-      // Dispatched-buffer för CSV-export
+      // Dispatched-buffer för CSV-export — O(1)-push till ringbuffer.
       const queueIdx = (desc.phase & 0x01) as 0 | 1;
-      const next = app.dispatchedDescriptors.slice();
-      next.push({ descriptor: desc, dispatchedAtMicros: wallNow, queueIdx });
-      if (next.length > DISPATCHED_BUFFER_CAP) {
-        next.splice(0, next.length - DISPATCHED_BUFFER_CAP);
-      }
-      app.dispatchedDescriptors = next;
+      app.pushDispatched({ descriptor: desc, dispatchedAtMicros: wallNow, queueIdx });
       // Optional debug-log per descriptor (gated på app.logDescriptors toggle)
       logDescriptorEmit(desc);
     },
     getRampPercent: () => ramp?.snapshot(performance.now()).effective ?? 0,
     getCeilingPercent: () => ceiling?.get() ?? app.ceiling,
+  });
+  // Wire upp engine-hooks så synth-store kan re-schedule channels vid
+  // add/re-enable under aktiv run (annars permanent tystnad — se synth-store).
+  attachEngineHooks({
+    ensureChannelScheduled: (id) => synthEngine?.ensureChannelScheduled(id),
   });
   return synthEngine;
 }
@@ -642,7 +688,7 @@ export function startMixer(): void {
   if (!waveformGen) waveformGen = new WaveformGenerator();
   waveformGen.reset();
   app.waveformBuffers = new Map();
-  app.dispatchedDescriptors = [];
+  app.clearDispatched();
   // Auto-show alla unika elcons från mixer-channels i Oscilloscope
   const visibleSet = new Set<string>();
   for (const ch of synth.current.channels) {
@@ -666,6 +712,9 @@ export function stopMixer(): void {
     synthEngine.stop();
   }
   app.isMixerRunning = false;
+  // Drain waveform-shadow så stale samples inte ligger kvar i Oscilloscope-
+  // buffer (matchar stopPattern beteende).
+  waveformGen?.reset();
   pushDebugLog({ ts: Date.now(), direction: 'system', text: 'Mixer stopped' });
   // Flush ev. ackumulerad summary direkt vid stop
   if (emitSummary.flushTimer !== null) {

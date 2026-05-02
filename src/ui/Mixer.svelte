@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { untrack } from 'svelte';
+  import { onMount, untrack } from 'svelte';
   import {
     synth,
     addChannel,
@@ -27,10 +27,13 @@
 
   let containerEl = $state<HTMLElement | null>(null);
 
-  /** F2 seed-state: 1 channel + 1 LFO vid första mount om allt är tomt. */
-  $effect(() => {
+  /**
+   * F2 seed-state: 1 channel + 1 LFO vid FÖRSTA mount om allt är tomt.
+   * onMount istället för $effect så seed inte re-fires om user senare
+   * raderar allt manuellt (surprising UX att defaults plötsligt återkommer).
+   */
+  onMount(() => {
     if (synth.current.channels.length === 0 && synth.current.lfos.length === 0) {
-      // Seed med ET-312-channel-A-equivalent (NeoDK A↔C)
       addChannel([ElectrodeMask.A, ElectrodeMask.C]);
       addLfo('sine');
     }

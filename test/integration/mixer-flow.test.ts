@@ -24,8 +24,10 @@ import {
   addCable,
   removeCable,
   setLfoRate,
+  setChannelEnabled,
   _resetIdsForTesting,
 } from '../../src/synth/state';
+import { computeLfoSignal } from '../../src/synth/lfo';
 import type { MixerState } from '../../src/synth/types';
 import type { PtDescriptor } from '../../src/protocol/descriptor';
 import { ElectrodeMask } from '../../src/patterns/types';
@@ -270,4 +272,115 @@ test('Engine: start utan channels är no-op (no errors)', () => {
   rig.clock.advance(100_000);
   expect(rig.emitted.length).toBe(0);
   expect(rig.engine.isRunning()).toBe(true);
+});
+
+// ── Rate-change phase-continuity (regression for setLfoRate glitch) ──
+
+test('setLfoRate re-ankrar phase: signal continuous över rate-bytet (no glitch)', () => {
+  // Pure unit-test för bug-fixen: utan re-anchor skulle signal hoppa när
+  // rate ändras eftersom dt-multiplikatorn bara byts. Med re-anchor förblir
+  // sample-värdet vid rate-change-tidpunkten samma, sen oscillerar med ny rate.
+  let s = emptyState();
+  s = addLfo(s); // 1Hz, sine, phase=0, anchor=0
+  const id = s.lfos[0]!.id;
+
+  // Vid t=250_000µs (kvart-cykel @ 1Hz) ska sine vara +1
+  const tChange = 250_000;
+  const sigBefore = computeLfoSignal(s.lfos[0]!, tChange, s.lfos[0]!.phaseAnchorMicros);
+  expect(sigBefore).toBeCloseTo(1, 6);
+
+  // Re-anchor till t=tChange med ny rate 5Hz
+  s = setLfoRate(s, id, 5, tChange);
+
+  // Signalen vid EXAKT tChange (omedelbart efter rate-byte) ska vara samma som före
+  // (continuity-krav: ingen diskontinuitet).
+  const sigAfter = computeLfoSignal(s.lfos[0]!, tChange, s.lfos[0]!.phaseAnchorMicros);
+  expect(sigAfter).toBeCloseTo(sigBefore, 6);
+
+  // Och från och med tChange oscillerar den med 5Hz (ny rate). Vid en kvart
+  // av 5Hz-period efter tChange (= 50_000µs senare = tChange + 50_000) ska
+  // signalen vara nästan -1 (sin(π/2 + 2π·5·0.05) = sin(π/2 + π/2) = sin(π) ≈ 0).
+  // Nej — sin(π/2 + π/2) = sin(π) = 0. OK testa det.
+  const sigQuarterLater = computeLfoSignal(s.lfos[0]!, tChange + 50_000, s.lfos[0]!.phaseAnchorMicros);
+  expect(sigQuarterLater).toBeCloseTo(0, 5);
+});
+
+test('setLfoRate UTAN simNow → phase NOT re-ankrad (legacy/test path)', () => {
+  let s = emptyState();
+  s = addLfo(s);
+  const id = s.lfos[0]!.id;
+  // Ingen simNow → bara rate-update, anchor förblir 0
+  s = setLfoRate(s, id, 5);
+  expect(s.lfos[0]?.phaseAnchorMicros).toBe(0);
+});
+
+// ── Re-enable channel mid-run (regression for runtime-leak fix) ─────
+
+test('setChannelEnabled OFF→ON under run: ensureChannelScheduled re-startar emission', () => {
+  let s = emptyState();
+  s = addChannel(s, [ElectrodeMask.A, ElectrodeMask.B]);
+  const chId = s.channels[0]!.id;
+  const rig = new MixerRig(s);
+
+  rig.engine.start();
+  rig.clock.advance(50_000); // 3 emits
+  expect(rig.emitted.length).toBe(3);
+
+  // Disable channel → emit() rensar runtime, inga fler emits
+  rig.setState(setChannelEnabled(rig.state, chId, false));
+  rig.clock.advance(50_000);
+  expect(rig.emitted.length).toBe(3); // tystnad
+
+  // Re-enable + ensureChannelScheduled (vad synth-store wrapper gör)
+  rig.setState(setChannelEnabled(rig.state, chId, true));
+  rig.engine.ensureChannelScheduled(chId);
+  rig.clock.advance(50_000);
+  // Emit:ar igen — minst 1 ny emit (initial schedule vid current time, sen pace)
+  expect(rig.emitted.length).toBeGreaterThan(3);
+});
+
+test('ensureChannelScheduled: no-op om engine inte kör', () => {
+  let s = emptyState();
+  s = addChannel(s, [ElectrodeMask.A, ElectrodeMask.B]);
+  const rig = new MixerRig(s);
+  // Engine ej startad
+  rig.engine.ensureChannelScheduled(s.channels[0]!.id);
+  rig.clock.advance(100_000);
+  expect(rig.emitted.length).toBe(0);
+});
+
+test('ensureChannelScheduled: idempotent — anropas på existing runtime gör inget', () => {
+  let s = emptyState();
+  s = addChannel(s, [ElectrodeMask.A, ElectrodeMask.B]);
+  const chId = s.channels[0]!.id;
+  const rig = new MixerRig(s);
+  rig.engine.start();
+  rig.clock.advance(0); // initial emit
+  expect(rig.emitted.length).toBe(1);
+
+  // Re-call ska inte schedulera dubblet
+  rig.engine.ensureChannelScheduled(chId);
+  rig.clock.advance(25_000); // 1 pace
+  expect(rig.emitted.length).toBe(2); // bara 1 nytt, inte 2
+});
+
+test('addChannel mid-run: ensureChannelScheduled startar emission för ny channel', () => {
+  let s = emptyState();
+  s = addChannel(s, [ElectrodeMask.A, ElectrodeMask.B]);
+  const rig = new MixerRig(s);
+  rig.engine.start();
+  rig.clock.advance(50_000);
+  const beforeAdd = rig.emitted.length;
+
+  // Lägg till ny channel mid-run
+  s = addChannel(rig.state, [ElectrodeMask.C, ElectrodeMask.D]);
+  rig.setState(s);
+  const newCh = s.channels[s.channels.length - 1]!;
+  rig.engine.ensureChannelScheduled(newCh.id);
+
+  rig.clock.advance(50_000);
+  const ch2Emits = rig.emitted
+    .slice(beforeAdd)
+    .filter((d) => d.electrodeSet[0] === ElectrodeMask.C);
+  expect(ch2Emits.length).toBeGreaterThan(0);
 });

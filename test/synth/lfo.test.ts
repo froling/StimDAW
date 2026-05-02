@@ -9,6 +9,7 @@ function makeLfo(overrides: Partial<LFO> = {}): LFO {
     amount: 1,
     shape: 'sine',
     phase: 0,
+    phaseAnchorMicros: 0,
     ...overrides,
   };
 }

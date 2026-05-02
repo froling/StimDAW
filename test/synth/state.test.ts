@@ -101,6 +101,42 @@ test('setLfoRate / setLfoAmount / setLfoShape', () => {
   expect(s.lfos[0]?.shape).toBe('triangle');
 });
 
+test('setLfoRate: clamps till LFO_RATE_MIN..MAX (0.01..50 Hz)', () => {
+  let s = addLfo(emptyState());
+  const id = s.lfos[0]!.id;
+  s = setLfoRate(s, id, 999);
+  expect(s.lfos[0]?.rate).toBe(50);
+  s = setLfoRate(s, id, -5);
+  expect(s.lfos[0]?.rate).toBe(0.01);
+  s = setLfoRate(s, id, NaN);
+  expect(s.lfos[0]?.rate).toBe(0.01);
+  s = setLfoRate(s, id, Infinity);
+  expect(s.lfos[0]?.rate).toBe(0.01); // !isFinite → fallback till min
+});
+
+test('setLfoRate: utan simNow → bara rate-update, phase oförändrat (test/legacy path)', () => {
+  let s = addLfo(emptyState());
+  const id = s.lfos[0]!.id;
+  s = { ...s, lfos: s.lfos.map((l) => ({ ...l, phase: Math.PI / 4, phaseAnchorMicros: 100 })) };
+  s = setLfoRate(s, id, 5);
+  expect(s.lfos[0]?.rate).toBe(5);
+  expect(s.lfos[0]?.phase).toBeCloseTo(Math.PI / 4, 6);
+  expect(s.lfos[0]?.phaseAnchorMicros).toBe(100);
+});
+
+test('setLfoRate: med simNow → re-ankrar phase så signal är continuous över rate-bytet', () => {
+  // Givet en LFO vid 1Hz som varit aktiv 0.25s (kvart-cykel = π/2)
+  let s = addLfo(emptyState());
+  const id = s.lfos[0]!.id;
+  // simNow = 250_000µs (kvart period vid 1Hz). Phase vid den tiden = 0 + 2π·1·0.25 = π/2.
+  s = setLfoRate(s, id, 5, 250_000);
+  expect(s.lfos[0]?.rate).toBe(5);
+  expect(s.lfos[0]?.phase).toBeCloseTo(Math.PI / 2, 6);
+  expect(s.lfos[0]?.phaseAnchorMicros).toBe(250_000);
+  // Verifiera continuity: computeLfoSignal vid t=250_000 ska ge sin(π/2)=1
+  // (samma som FÖRE rate-byte).
+});
+
 test('setLfoAmount: clamps till [0, 1]', () => {
   let s = addLfo(emptyState());
   const id = s.lfos[0]!.id;

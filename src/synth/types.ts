@@ -37,9 +37,19 @@ export interface LFO {
   /** Master output gain 0..1. amount=0 silences LFOn helt. */
   readonly amount: number;
   readonly shape: WaveShape;
-  /** Internal phase i radians, ackumulerar via dt × 2π × rate. */
+  /** Internal phase i radians, ackumulerar via dt × 2π × rate från phaseAnchorMicros. */
   readonly phase: number;
+  /**
+   * Tid (sim-µs) då phase var sant. computeLfoSignal beräknar effektiv phase som
+   * `phase + 2π × rate × (now - phaseAnchorMicros) / 1M`. setLfoRate re-ankrar
+   * vid rate-byte så signalen är continuous över bytet (annars phase-glitch).
+   */
+  readonly phaseAnchorMicros: number;
 }
+
+/** Hardware/UX bounds för LFO rate. Synkat med LFOModule.svelte RATE_BOUNDS. */
+export const LFO_RATE_MIN_HZ = 0.01;
+export const LFO_RATE_MAX_HZ = 50;
 
 /**
  * Mixer channel — en per elcon-par. Tre knobs (pulse_width, pace, amplitude),

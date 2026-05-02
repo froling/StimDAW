@@ -47,12 +47,12 @@
       type="button"
       class="export-btn"
       onclick={exportDispatchedCsv}
-      disabled={app.dispatchedDescriptors.length === 0}
+      disabled={app.dispatchedCount === 0}
       title="Export dispatched descriptors as patterns312-CSV"
     >
       Export CSV
-      {#if app.dispatchedDescriptors.length > 0}
-        <span class="export-count">({app.dispatchedDescriptors.length})</span>
+      {#if app.dispatchedCount > 0}
+        <span class="export-count">({app.dispatchedCount})</span>
       {/if}
     </button>
     <button

@@ -92,6 +92,23 @@ export class SynthEngine {
     return this.runtime.get(channelId);
   }
 
+  /**
+   * Säkerställ att en channel har scheduling under en aktiv run-session.
+   * No-op om engine inte kör, channel saknas/är disabled, eller redan har
+   * runtime-entry. Anropas av stores.svelte.ts wrappers när:
+   *   - en disabled channel re-enable:as under run (annars permanent tystnad)
+   *   - en ny channel läggs till under run (annars emittar aldrig)
+   */
+  ensureChannelScheduled(channelId: string): void {
+    if (!this.running) return;
+    if (this.runtime.has(channelId)) return;
+    const ch = this.opts.getState().channels.find((c) => c.id === channelId);
+    if (!ch || !ch.enabled) return;
+    const now = this.opts.clock.nowMicros();
+    this.runtime.set(channelId, { nextEmitMicros: now, lastPhase: 1 });
+    this.scheduleEmit(channelId, now);
+  }
+
   // ── Scheduling ──────────────────────────────────────────────────
 
   private scheduleEmit(channelId: string, atMicros: number): void {
@@ -163,12 +180,19 @@ export class SynthEngine {
       deltaPulseWidthQuarters: 0,
       deltaPaceMicros: 0,
     };
-    this.opts.sink(descriptor);
 
-    // Schedule next emit at currentTime + effective_pace
+    // Schedule next emit FÖRE sink så ett sink-throw inte bryter scheduling-
+    // kedjan permanent (channel skulle annars bli tyst för alltid).
     const nextEmit = tMicros + paceEffective;
     runtime.nextEmitMicros = nextEmit;
     this.scheduleEmit(channelId, nextEmit);
+
+    try {
+      this.opts.sink(descriptor);
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.error('[synth-engine] sink threw, scheduling fortsätter:', e);
+    }
   }
 
   private nextSeqNr(): number {
@@ -201,7 +225,8 @@ export function evaluateKnob(
   const lfo = state.lfos.find((l) => l.id === cable.sourceLfoId);
   if (!lfo) return clamp(knob.base, bounds.min, bounds.max);
 
-  const signal = computeLfoSignal(lfo, tMicros); // -1..+1 × lfo.amount
+  // Använd lfo.phaseAnchorMicros så rate-byten är continuous (set i state.setLfoRate).
+  const signal = computeLfoSignal(lfo, tMicros, lfo.phaseAnchorMicros);
   const range = bounds.max - bounds.min;
   const swing = signal * cable.depth * (range / 2);
   return clamp(knob.base + swing, bounds.min, bounds.max);

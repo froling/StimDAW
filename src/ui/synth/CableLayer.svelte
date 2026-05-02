@@ -168,20 +168,27 @@
 
   // ── Cable-click → delete ───────────────────────────────────────
 
+  /**
+   * Mouse-aktivation: plain click = no-op (för accidental-click-skydd —
+   * cable bezier är lätt att råka klicka under pan/scroll). Shift+click =
+   * instant delete. Ingen confirm()-dialog (browser-native är jarring i
+   * appens UI-ton).
+   *
+   * Keyboard-aktivation är intentional (user måste tabba dit) så Enter =
+   * confirm-delete är OK där, behålls separat.
+   */
   function onCableClick(cable: Cable, e: MouseEvent): void {
     e.stopPropagation();
     if (e.shiftKey) {
-      // Shift+click → instant delete (per audit F5/E)
-      removeCable(cable.id);
-    } else if (confirm('Remove cable?')) {
-      // Plain click → confirm
       removeCable(cable.id);
     }
+    // Plain click: no-op
   }
 
   /**
-   * Keyboard equivalent för cable-click (per a11y audit-rec):
-   * Enter = confirm-delete, Shift+Enter eller Delete = instant delete.
+   * Keyboard equivalent för cable-aktivering. Tab-target via tabindex=0
+   * + role=button. Enter = confirm-delete (intentional aktivering),
+   * Delete eller Shift+Enter = instant delete.
    */
   function onCableKeydown(cable: Cable, e: KeyboardEvent): void {
     if (e.key === 'Delete' || (e.key === 'Enter' && e.shiftKey)) {
@@ -251,7 +258,7 @@
         stroke={colorLabel.color}
         onclick={(e) => onCableClick(cable, e)}
         onkeydown={(e) => onCableKeydown(cable, e)}
-        aria-label={`Cable from ${colorLabel.label} to ${cable.destChannelId} ${cable.destKnobName}. Press Enter to delete, Shift+Enter or Delete för instant.`}
+        aria-label={`Cable from ${colorLabel.label} to ${cable.destChannelId} ${cable.destKnobName}. Shift+click eller Delete för att radera.`}
         role="button"
         tabindex="0"
       />

@@ -24,10 +24,27 @@ class SynthStore {
 
 export const synth = new SynthStore();
 
+/**
+ * Engine-hook injektion: stores.svelte.ts registrerar callback här efter
+ * synthEngine init. Används av addChannel/setChannelEnabled-wrappers för att
+ * informera engine om nya/re-enable:ade channels under aktiv run (annars
+ * permanent tystnad — channels utan runtime-entry får aldrig schedule).
+ *
+ * Designval: callback istället för direkt SynthEngine-import för att undvika
+ * cirkulär import (stores → synth-store → synth-engine → ... ).
+ */
+let engineHooks: { ensureChannelScheduled: (channelId: string) => void } | null = null;
+export function attachEngineHooks(hooks: typeof engineHooks): void {
+  engineHooks = hooks;
+}
+
 // ── Channel actions ────────────────────────────────────────────────
 
 export function addChannel(elcon: Elcon): void {
   synth.current = state.addChannel(synth.current, elcon);
+  // Notify engine om vi adderar mid-run så ny channel börjar emit:a
+  const newCh = synth.current.channels[synth.current.channels.length - 1];
+  if (newCh) engineHooks?.ensureChannelScheduled(newCh.id);
 }
 
 export function removeChannel(channelId: string): void {
@@ -44,6 +61,8 @@ export function updateKnobBase(
 
 export function setChannelEnabled(channelId: string, enabled: boolean): void {
   synth.current = state.setChannelEnabled(synth.current, channelId, enabled);
+  // Disabled→enabled under run: re-schedule, annars channel tyst för alltid.
+  if (enabled) engineHooks?.ensureChannelScheduled(channelId);
 }
 
 // ── LFO actions ────────────────────────────────────────────────────
@@ -57,7 +76,10 @@ export function removeLfo(lfoId: string): void {
 }
 
 export function setLfoRate(lfoId: string, rate: number): void {
-  synth.current = state.setLfoRate(synth.current, lfoId, rate);
+  // Skicka nuvarande wall-time som re-anchor så signalen är continuous över
+  // rate-bytet (annars phase-glitch när user drar rate-knobben under run).
+  // performance.now()*1000 = µs, samma tidsbas som RealtimeClock.
+  synth.current = state.setLfoRate(synth.current, lfoId, rate, performance.now() * 1000);
 }
 
 export function setLfoAmount(lfoId: string, amount: number): void {

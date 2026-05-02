@@ -21,7 +21,8 @@ import type {
   MixerState,
   WaveShape,
 } from './types';
-import { KNOB_DEFAULTS } from './types';
+import { KNOB_DEFAULTS, LFO_RATE_MIN_HZ, LFO_RATE_MAX_HZ } from './types';
+import { reAnchorPhase } from './lfo';
 import type { Elcon } from '../patterns/types';
 
 let nextIdCounter = 1;
@@ -112,6 +113,7 @@ export function addLfo(state: MixerState, shape: WaveShape = 'sine'): MixerState
     amount: 1,
     shape,
     phase: 0,
+    phaseAnchorMicros: 0,
   };
   return { ...state, lfos: [...state.lfos, lfo] };
 }
@@ -150,10 +152,38 @@ export function removeLfo(state: MixerState, lfoId: string): MixerState {
   };
 }
 
-export function setLfoRate(state: MixerState, lfoId: string, rate: number): MixerState {
+/**
+ * Uppdatera LFO-rate. När `simNowMicros` ges re-ankras phase så signalen är
+ * continuous över rate-bytet (ingen glitch). Anropa utan simNowMicros endast
+ * från test-kod eller före engine-start; från UI/synth-store ska den alltid
+ * skickas med (typiskt `performance.now() * 1000`).
+ *
+ * Rate clampas till LFO_RATE_MIN/MAX för att skydda mot programmatiska callers
+ * som skipper Knob.svelte (Knob clampar redan via tToValue).
+ */
+export function setLfoRate(
+  state: MixerState,
+  lfoId: string,
+  rate: number,
+  simNowMicros?: number,
+): MixerState {
+  const safeRate = Number.isFinite(rate)
+    ? Math.max(LFO_RATE_MIN_HZ, Math.min(LFO_RATE_MAX_HZ, rate))
+    : LFO_RATE_MIN_HZ;
   return {
     ...state,
-    lfos: state.lfos.map((l) => (l.id !== lfoId ? l : { ...l, rate })),
+    lfos: state.lfos.map((l) => {
+      if (l.id !== lfoId) return l;
+      if (simNowMicros === undefined) return { ...l, rate: safeRate };
+      // Re-anchor: beräkna current phase med GAMLA rate, sätt det som ny anchor
+      // → ny rate används framåt utan diskontinuitet.
+      const reAnchored = reAnchorPhase(l, simNowMicros, l.phaseAnchorMicros);
+      return {
+        ...reAnchored,
+        rate: safeRate,
+        phaseAnchorMicros: simNowMicros,
+      };
+    }),
   };
 }
 

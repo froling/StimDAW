@@ -93,7 +93,7 @@ export function installTestHelpers(): void {
     getIsMixerRunning: () => appStore.app.isMixerRunning,
     getIsPatternRunning: () => appStore.app.isRunningPattern,
     getDispatchedDescriptors: () => appStore.app.dispatchedDescriptors,
-    getDispatchedCount: () => appStore.app.dispatchedDescriptors.length,
+    getDispatchedCount: () => appStore.app.dispatchedCount,
 
     addChannel: (pos = ElectrodeMask.A, neg = ElectrodeMask.C) => {
       const before = synthStore.synth.current.channels.length;
@@ -147,7 +147,7 @@ export function installTestHelpers(): void {
       activeSource: synthStore.synth.activeSource,
       connection: appStore.app.connection,
       isMixerRunning: appStore.app.isMixerRunning,
-      dispatchedCount: appStore.app.dispatchedDescriptors.length,
+      dispatchedCount: appStore.app.dispatchedCount,
     }),
   };
 
