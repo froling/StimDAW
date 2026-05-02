@@ -1,10 +1,13 @@
 ---
-status: LOCKED (post eng-review 2026-05-02)
-supersedes: ALPHA2_DESCRIPTOR_OSCILLOSCOPE.md
+status: SHIPPED
 date: 2026-05-01
 review: 2026-05-02 (plan-eng-review + outside voice)
+shipped: 2026-05-03 (frame-builder pipeline + 4 fasta electrode-rader live)
+supersedes: ALPHA2_DESCRIPTOR_OSCILLOSCOPE.md (raderad)
 ---
 # BETA Oscilloscope — Re-design with hardware truth
+
+> **Historical.** Frame-builder pipeline + 4 fasta electrode-rader (A/B/C/D) shipped. Aktuell impl: `src/oscilloscope/`, `src/ui/Oscilloscope.svelte`, `src/ui/PolarFlow.svelte`. Se [ARCHITECTURE.md](../ARCHITECTURE.md) för current state.
 
 ## Why we're starting over
 

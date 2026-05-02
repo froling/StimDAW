@@ -1,10 +1,13 @@
 ---
-status: LOCKED (post eng-review 2026-05-02)
+status: SHIPPED
 date: 2026-05-02
+shipped: 2026-05-03 (Phase A one-liner: ampNorm från descriptor.amplitude istället för Vcap-telemetri)
 supersedes: (none — companion to BETA_OSCILLOSCOPE.md)
 review: 2026-05-02 (plan-eng-review + outside voice — strategic miscalibration caught, scope reduced)
 ---
 # StimDAW β — DAW/Viz boundary refactor (REDUCED SCOPE)
+
+> **Historical.** Phase A shipped. Phase B (boundary-clarity comments) + Phase C (channel-identity-tagging) deferred till TODOS.md som β.1-uppgifter. Aktuell viz reflekterar DAW-intent (descriptor.amplitude) inte telemetri.
 
 ## Final scope (post eng-review)
 
