@@ -206,8 +206,19 @@ export class SynthEngine {
  * Evaluera knob-värde: base + signal × depth × range, sedan clamp.
  *
  * Reason-style modulation: knob.base är user-set (visuellt fixerad), LFO
- * oscillerar runt det. signal ∈ [-1, +1] mappat via depth × range / 2 →
- * effective ∈ [base - range/2 × depth, base + range/2 × depth], clampad.
+ * oscillerar runt det. signal ∈ [-1, +1] (× amount × ev. mode-transform)
+ * mappat via depth × range → effective ∈ [base - range × depth, base +
+ * range × depth], clampad till bounds.
+ *
+ * Full-range scaling (uppgraderat från range/2): LFO amount=100%, depth=
+ * 100% kan svinga ±FULLA range. Det betyder att från base=min når LFO
+ * max-bound, från base=max når LFO min-bound. Klampning gör asymmetriskt
+ * arbete beroende på base-position. Tidigare range/2 begränsade swing
+ * till halva — kunde inte topp-/bottna från extrem-base.
+ *
+ * Combined med negative-boost mode: positiv swing = +range, negativ
+ * swing = -2×range (extra deep-dive). Med negative-only mode: signal
+ * mappas till [-1, 0] → swing ∈ [-range, 0].
  *
  * Pure function — testbar isolerat.
  */
@@ -228,7 +239,7 @@ export function evaluateKnob(
   // Använd lfo.phaseAnchorMicros så rate-byten är continuous (set i state.setLfoRate).
   const signal = computeLfoSignal(lfo, tMicros, lfo.phaseAnchorMicros);
   const range = bounds.max - bounds.min;
-  const swing = signal * cable.depth * (range / 2);
+  const swing = signal * cable.depth * range;
   return clamp(knob.base + swing, bounds.min, bounds.max);
 }
 

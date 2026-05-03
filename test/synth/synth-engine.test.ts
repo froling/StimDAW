@@ -64,7 +64,7 @@ test('evaluateKnob: clamps under min och över max när base är out-of-bounds',
   expect(evaluateKnob({ base: 500, modCableId: null }, { min: 2, max: 200 }, 0, emptyState())).toBe(200);
 });
 
-test('evaluateKnob: med cable returnerar base + signal × depth × range/2', () => {
+test('evaluateKnob: med cable returnerar base + signal × depth × range', () => {
   let state = emptyState();
   state = addLfo(state); // lfo-1, sine, rate=1
   state = addChannel(state, [ElectrodeMask.A, ElectrodeMask.B]);
@@ -75,9 +75,49 @@ test('evaluateKnob: med cable returnerar base + signal × depth × range/2', () 
   // Vid t=0, sine=0 → base = 100
   expect(evaluateKnob(knob, { min: 0, max: 200 }, 0, state)).toBeCloseTo(100, 6);
 
-  // Vid t=250_000µs (kvart period av 1Hz), sine=1, depth=1, range/2=100 →
-  // base + 1 × 1 × 100 = 200, clampat till max
+  // Vid t=250_000µs (kvart period av 1Hz), sine=1, depth=1, range=200 →
+  // base + 1 × 1 × 200 = 300, clampat till max=200
   expect(evaluateKnob(knob, { min: 0, max: 200 }, 250_000, state)).toBeCloseTo(200, 6);
+});
+
+test('evaluateKnob: full-range från base=min — sine peak når max-bound', () => {
+  let state = emptyState();
+  state = addLfo(state); // sine 1Hz amount=1
+  state = addChannel(state, [ElectrodeMask.A, ElectrodeMask.B]);
+  state = addCable(state, state.lfos[0]!.id, state.channels[0]!.id, 'amplitude', 1.0);
+  const cableId = state.cables[0]!.id;
+  // Base vid min (amp=0)
+  const knob: KnobState = { base: 0, modCableId: cableId };
+  // Vid t=250_000 (sine peak = +1), depth=1: swing = 1 × 1 × 255 = 255
+  // base=0 + 255 = 255 (max-bound nås)
+  expect(evaluateKnob(knob, { min: 0, max: 255 }, 250_000, state)).toBeCloseTo(255, 6);
+});
+
+test('evaluateKnob: full-range från base=max — sine valley når min-bound', () => {
+  let state = emptyState();
+  state = addLfo(state);
+  state = addChannel(state, [ElectrodeMask.A, ElectrodeMask.B]);
+  state = addCable(state, state.lfos[0]!.id, state.channels[0]!.id, 'amplitude', 1.0);
+  const cableId = state.cables[0]!.id;
+  // Base vid max (amp=255)
+  const knob: KnobState = { base: 255, modCableId: cableId };
+  // Vid t=750_000 (sine valley = -1), depth=1: swing = -1 × 1 × 255 = -255
+  // base=255 - 255 = 0 (min-bound nås)
+  expect(evaluateKnob(knob, { min: 0, max: 255 }, 750_000, state)).toBeCloseTo(0, 6);
+});
+
+test('evaluateKnob: cable.depth=0.5 halvar swing', () => {
+  let state = emptyState();
+  state = addLfo(state);
+  state = addChannel(state, [ElectrodeMask.A, ElectrodeMask.B]);
+  state = addCable(state, state.lfos[0]!.id, state.channels[0]!.id, 'amplitude', 0.5);
+  const cableId = state.cables[0]!.id;
+  // Base mid (128), depth=0.5, peak signal: swing = 1 × 0.5 × 255 = 127.5
+  // 128 + 127.5 = 255.5 → clamp 255
+  const knob: KnobState = { base: 128, modCableId: cableId };
+  expect(evaluateKnob(knob, { min: 0, max: 255 }, 250_000, state)).toBeCloseTo(255, 6);
+  // Valley: 128 - 127.5 = 0.5 → near min, ej ända ner
+  expect(evaluateKnob(knob, { min: 0, max: 255 }, 750_000, state)).toBeCloseTo(0.5, 6);
 });
 
 test('evaluateKnob: dangling cable-ref → graceful fallback till base', () => {
