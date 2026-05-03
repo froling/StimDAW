@@ -4,10 +4,12 @@
     synth,
     addChannel,
     addLfo,
+    addChain,
     setActiveSource,
   } from './synth/synth-store.svelte';
   import MixerChannel from './synth/MixerChannel.svelte';
   import LFOModule from './synth/LFOModule.svelte';
+  import LFOChainModule from './synth/LFOChainModule.svelte';
   import CableLayer from './synth/CableLayer.svelte';
   import { lfoColor } from './synth/cable-helpers';
   import { ElectrodeMask, type Elcon } from '../patterns/types';
@@ -57,8 +59,24 @@
    * de berör.
    */
 
+  /**
+   * Få modulator-color baserat på source-id (LFO eller chain).
+   * LFOs använder lfoColor-paletten. Chains får en separat orange-tone
+   * (#cc6600) för visuell distinktion oavsett vilken LFO-rot de hänger på.
+   */
+  function modulatorColor(sourceId: string): string | null {
+    const lfoIdx = synth.current.lfos.findIndex((l) => l.id === sourceId);
+    if (lfoIdx >= 0) return lfoColor(lfoIdx);
+    const chainIdx = synth.current.chains.findIndex((c) => c.id === sourceId);
+    if (chainIdx >= 0) return CHAIN_COLOR;
+    return null;
+  }
+
+  /** Färg för chain output-port + cables från chain. Distinkt från LFO-paletten. */
+  const CHAIN_COLOR = '#cc6600';
+
   /** Beräkna modColors för en channel — vilka av dess knobs är modulerade,
-   *  och i vilken LFO-färg. Per audit F4. */
+   *  och i vilken modulator-färg. Per audit F4 + chain-extension. */
   function getModColors(
     ch: ChannelT,
   ): { pulseWidth?: string; pace?: string; amplitude?: string } {
@@ -68,12 +86,39 @@
       if (!cableId) continue;
       const cable = synth.current.cables.find((c) => c.id === cableId);
       if (!cable) continue;
-      const lfoIdx = synth.current.lfos.findIndex((l) => l.id === cable.sourceLfoId);
-      if (lfoIdx >= 0) {
-        result[knobName] = lfoColor(lfoIdx);
-      }
+      const color = modulatorColor(cable.sourceLfoId);
+      if (color) result[knobName] = color;
     }
     return result;
+  }
+
+  /**
+   * Bygg lista av tillgängliga sources för en given chain (LFOs + andra
+   * chains exkl. self + descendants — undvik cycle vid source-pick).
+   */
+  function getAvailableSources(chainId: string): { id: string; label: string }[] {
+    // Hitta alla descendants (transitivt) av chainId — de får INTE väljas
+    // som source pga cycle.
+    const forbidden = new Set<string>([chainId]);
+    let changed = true;
+    while (changed) {
+      changed = false;
+      for (const c of synth.current.chains) {
+        if (forbidden.has(c.sourceId) && !forbidden.has(c.id)) {
+          forbidden.add(c.id);
+          changed = true;
+        }
+      }
+    }
+    const out: { id: string; label: string }[] = [];
+    for (const lfo of synth.current.lfos) {
+      out.push({ id: lfo.id, label: lfo.id });
+    }
+    for (const c of synth.current.chains) {
+      if (forbidden.has(c.id)) continue;
+      out.push({ id: c.id, label: c.id });
+    }
+    return out;
   }
 
   function onAddChannel(): void {
@@ -109,6 +154,16 @@
     const shapes = ['sine', 'saw', 'square', 'triangle'] as const;
     const idx = synth.current.lfos.length % shapes.length;
     addLfo(shapes[idx]!);
+  }
+
+  /**
+   * Lägg till chain. Default source = första LFO (rotmodulator). Om inga
+   * LFOs finns, no-op (chain måste hänga på en rate-source).
+   */
+  function onAddChain(): void {
+    const firstLfo = synth.current.lfos[0];
+    if (!firstLfo) return;
+    addChain(firstLfo.id, { trigger: 'full', shape: 'sine' });
   }
 
   let isRunning = $derived(app.isMixerRunning);
@@ -188,9 +243,27 @@
       {#each synth.current.lfos as lfo, i (lfo.id)}
         <LFOModule {lfo} color={lfoColor(i)} />
       {/each}
+      {#each synth.current.chains as chain (chain.id)}
+        <LFOChainModule
+          {chain}
+          availableSources={getAvailableSources(chain.id)}
+          color={CHAIN_COLOR}
+        />
+      {/each}
       <button class="add-card" type="button" onclick={onAddLfo} data-testid="mixer-add-lfo">
         <span class="plus">+</span>
         <span class="add-label">LFO</span>
+      </button>
+      <button
+        class="add-card add-card-chain"
+        type="button"
+        onclick={onAddChain}
+        disabled={synth.current.lfos.length === 0}
+        title={synth.current.lfos.length === 0 ? 'Add an LFO first — chain needs a rate source' : 'Add LFO Chain (slave-modulator with source-driven rate)'}
+        data-testid="mixer-add-chain"
+      >
+        <span class="plus">+</span>
+        <span class="add-label">Chain</span>
       </button>
     </div>
   </div>
@@ -351,10 +424,14 @@
     font-size: 0.78rem;
     transition: border-color 0.1s, color 0.1s, background 0.1s;
   }
-  .add-card:hover {
+  .add-card:hover:not(:disabled) {
     border-color: #0066cc;
     color: #0066cc;
     background: #f7faff;
+  }
+  .add-card:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
   }
   .add-card .plus {
     font-size: 1.4rem;
@@ -363,6 +440,15 @@
   .add-card .add-label {
     font-size: 0.72rem;
     letter-spacing: 0.03em;
+  }
+  .add-card-chain {
+    /* Chain-tint: orange istället för blå för att matcha CHAIN_COLOR */
+    border-color: #e0c0a0;
+  }
+  .add-card-chain:hover:not(:disabled) {
+    border-color: #cc6600;
+    color: #cc6600;
+    background: #fdf8f2;
   }
 
   .footnote {

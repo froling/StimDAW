@@ -23,7 +23,7 @@
  */
 import type { Clock } from './clock';
 import type { ChannelRuntime, KnobState, MixerState } from './types';
-import { computeLfoSignal } from './lfo';
+import { computeModulatorSignal, lookupModulator } from './lfo';
 import { clampAmp } from '../safety/clamp';
 import {
   PULSE_WIDTH_MIN_MICROS,
@@ -233,11 +233,13 @@ export function evaluateKnob(
   }
   const cable = state.cables.find((c) => c.id === knob.modCableId);
   if (!cable) return clamp(knob.base, bounds.min, bounds.max);
-  const lfo = state.lfos.find((l) => l.id === cable.sourceLfoId);
-  if (!lfo) return clamp(knob.base, bounds.min, bounds.max);
+  // Source kan vara LFO eller LfoChain — lookupModulator hanterar båda.
+  const modulator = lookupModulator(cable.sourceLfoId, state.lfos, state.chains);
+  if (!modulator) return clamp(knob.base, bounds.min, bounds.max);
 
-  // Använd lfo.phaseAnchorMicros så rate-byten är continuous (set i state.setLfoRate).
-  const signal = computeLfoSignal(lfo, tMicros, lfo.phaseAnchorMicros);
+  // computeModulatorSignal dispatchar på modulator-typ (LFO med phase-anchor
+  // eller chain med trigger-baserad phase-reset från source).
+  const signal = computeModulatorSignal(modulator, tMicros, state.lfos, state.chains);
   const range = bounds.max - bounds.min;
   const swing = signal * cable.depth * range;
   return clamp(knob.base + swing, bounds.min, bounds.max);

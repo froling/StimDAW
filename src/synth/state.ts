@@ -15,8 +15,10 @@
  */
 import type {
   Cable,
+  ChainTrigger,
   KnobState,
   LFO,
+  LfoChain,
   MixerChannel,
   MixerState,
   WaveMode,
@@ -38,7 +40,7 @@ export function _resetIdsForTesting(): void {
 }
 
 export function emptyState(): MixerState {
-  return { channels: [], lfos: [], cables: [] };
+  return { channels: [], lfos: [], chains: [], cables: [] };
 }
 
 // ── Channels ────────────────────────────────────────────────────────
@@ -144,14 +146,21 @@ export function addLfo(state: MixerState, shape: WaveShape = 'sine'): MixerState
 }
 
 /**
- * Remove LFO + cascade-delete cables från denna LFO. Per eng-review 2.4A.
- * Måste också rensa modCableId på knobs som pekade på de borttagna cables —
- * annars dangling reference brryter invariant.
+ * Remove LFO + transitiv cascade-delete: alla LfoChains som har denna LFO
+ * som source (direkt eller indirekt via chain-kedja) raderas också, plus
+ * cables till alla borttagna modulator-id (LFO + chains). Knob.modCableId
+ * clears för knobs som pekade på borttagna cables.
  */
 export function removeLfo(state: MixerState, lfoId: string): MixerState {
+  // Hitta alla descendants i chain-grafen som har denna LFO som rot
+  const descendantChains = findTransitiveDescendants(lfoId, state.chains);
+  // descendantChains inkluderar lfoId själv — det är OK som lookup-key för
+  // cables-filter
+
   const cablesToRemove = new Set(
-    state.cables.filter((c) => c.sourceLfoId === lfoId).map((c) => c.id),
+    state.cables.filter((c) => descendantChains.has(c.sourceLfoId)).map((c) => c.id),
   );
+
   // Clear modCableId på alla knobs som pekade på borttagna cables
   const channels = state.channels.map((ch) => {
     let mutated = ch;
@@ -172,7 +181,8 @@ export function removeLfo(state: MixerState, lfoId: string): MixerState {
   return {
     ...state,
     lfos: state.lfos.filter((l) => l.id !== lfoId),
-    cables: state.cables.filter((c) => c.sourceLfoId !== lfoId),
+    chains: state.chains.filter((c) => !descendantChains.has(c.id)),
+    cables: state.cables.filter((c) => !cablesToRemove.has(c.id)),
     channels,
   };
 }
@@ -236,6 +246,201 @@ export function setLfoMode(state: MixerState, lfoId: string, mode: WaveMode): Mi
   };
 }
 
+// ── LFO Chains ──────────────────────────────────────────────────────
+
+/**
+ * Hjälpare: hittar alla descendant chains (transitivt) för en given
+ * source-modulator-id. Inkluderar source-id själv i returset.
+ *
+ * Använt av removeLfo + removeChain för att cascade-deletea hela
+ * chain-grenar när rooten tas bort.
+ */
+function findTransitiveDescendants(
+  rootId: string,
+  chains: readonly LfoChain[],
+): Set<string> {
+  const result = new Set<string>([rootId]);
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const c of chains) {
+      if (!result.has(c.id) && result.has(c.sourceId)) {
+        result.add(c.id);
+        changed = true;
+      }
+    }
+  }
+  return result;
+}
+
+/**
+ * Hjälpare: skulle en chain med `chainId` och `sourceId` skapa en cycle?
+ * Walk source-grafen från sourceId; om vi någonsin når chainId = cycle.
+ *
+ * Vid addChain har vi inget existing chainId än — passera då en placeholder
+ * som inte matchar nån befintlig chain.
+ */
+function wouldCreateCycle(
+  chainId: string,
+  sourceId: string,
+  chains: readonly LfoChain[],
+): boolean {
+  if (sourceId === chainId) return true; // self-ref
+  let current: string | null = sourceId;
+  const visited = new Set<string>([chainId]);
+  while (current) {
+    if (visited.has(current)) return true;
+    visited.add(current);
+    const next: LfoChain | undefined = chains.find((c) => c.id === current);
+    if (!next) return false; // reached LFO id eller dangling — no cycle
+    current = next.sourceId;
+  }
+  return false;
+}
+
+/**
+ * Lägg till en LfoChain. sourceId måste peka på existing LFO eller chain
+ * och får inte skapa cycle. Defaults: trigger='full', shape='sine',
+ * amount=1, mode='bipolar'.
+ *
+ * Returnerar oförändrad state vid invalid source eller cycle.
+ */
+export function addChain(
+  state: MixerState,
+  sourceId: string,
+  options: {
+    trigger?: ChainTrigger;
+    shape?: WaveShape;
+    amount?: number;
+    mode?: WaveMode;
+  } = {},
+): MixerState {
+  // Validate source exists (LFO eller chain)
+  const sourceExists =
+    state.lfos.some((l) => l.id === sourceId) ||
+    state.chains.some((c) => c.id === sourceId);
+  if (!sourceExists) return state;
+
+  const newId = nextId('chain');
+  if (wouldCreateCycle(newId, sourceId, state.chains)) return state;
+
+  const chain: LfoChain = {
+    id: newId,
+    sourceId,
+    trigger: options.trigger ?? 'full',
+    shape: options.shape ?? 'sine',
+    amount: options.amount ?? 1,
+    mode: options.mode ?? 'bipolar',
+  };
+  return { ...state, chains: [...state.chains, chain] };
+}
+
+/**
+ * Remove chain + transitiv cascade-delete: alla chains som har denna chain
+ * som source (direkt eller indirekt) tas också bort, samt cables till
+ * alla borttagna chains. Knob.modCableId clears för knobs som pekade på
+ * borttagna cables.
+ */
+export function removeChain(state: MixerState, chainId: string): MixerState {
+  const toRemove = findTransitiveDescendants(chainId, state.chains);
+
+  const cablesToRemove = new Set(
+    state.cables.filter((c) => toRemove.has(c.sourceLfoId)).map((c) => c.id),
+  );
+
+  const channels = state.channels.map((ch) => {
+    let mutated = ch;
+    for (const knobName of ['pulseWidth', 'pace', 'amplitude'] as const) {
+      const knob = mutated.knobs[knobName];
+      if (knob.modCableId !== null && cablesToRemove.has(knob.modCableId)) {
+        mutated = {
+          ...mutated,
+          knobs: {
+            ...mutated.knobs,
+            [knobName]: { ...knob, modCableId: null },
+          },
+        };
+      }
+    }
+    return mutated;
+  });
+
+  return {
+    ...state,
+    chains: state.chains.filter((c) => !toRemove.has(c.id)),
+    cables: state.cables.filter((c) => !cablesToRemove.has(c.id)),
+    channels,
+  };
+}
+
+/**
+ * Sätt source för existing chain. Validerar att ny source existerar och
+ * att bytet inte skapar cycle. Returnerar oförändrad state vid ogiltigt val.
+ */
+export function setChainSource(
+  state: MixerState,
+  chainId: string,
+  newSourceId: string,
+): MixerState {
+  const sourceExists =
+    state.lfos.some((l) => l.id === newSourceId) ||
+    state.chains.some((c) => c.id === newSourceId);
+  if (!sourceExists) return state;
+  if (wouldCreateCycle(chainId, newSourceId, state.chains)) return state;
+  return {
+    ...state,
+    chains: state.chains.map((c) =>
+      c.id !== chainId ? c : { ...c, sourceId: newSourceId },
+    ),
+  };
+}
+
+export function setChainTrigger(
+  state: MixerState,
+  chainId: string,
+  trigger: ChainTrigger,
+): MixerState {
+  return {
+    ...state,
+    chains: state.chains.map((c) => (c.id !== chainId ? c : { ...c, trigger })),
+  };
+}
+
+export function setChainShape(
+  state: MixerState,
+  chainId: string,
+  shape: WaveShape,
+): MixerState {
+  return {
+    ...state,
+    chains: state.chains.map((c) => (c.id !== chainId ? c : { ...c, shape })),
+  };
+}
+
+export function setChainAmount(
+  state: MixerState,
+  chainId: string,
+  amount: number,
+): MixerState {
+  return {
+    ...state,
+    chains: state.chains.map((c) =>
+      c.id !== chainId ? c : { ...c, amount: Math.max(0, Math.min(1, amount)) },
+    ),
+  };
+}
+
+export function setChainMode(
+  state: MixerState,
+  chainId: string,
+  mode: WaveMode,
+): MixerState {
+  return {
+    ...state,
+    chains: state.chains.map((c) => (c.id !== chainId ? c : { ...c, mode })),
+  };
+}
+
 // ── Cables ──────────────────────────────────────────────────────────
 
 /**
@@ -252,8 +457,11 @@ export function addCable(
   destKnobName: 'pulseWidth' | 'pace' | 'amplitude',
   depth: number = 0.5,
 ): MixerState {
-  // Validate refs
-  if (!state.lfos.some((l) => l.id === sourceLfoId)) return state;
+  // Validate refs — source kan vara LFO eller LfoChain
+  const sourceExists =
+    state.lfos.some((l) => l.id === sourceLfoId) ||
+    state.chains.some((c) => c.id === sourceLfoId);
+  if (!sourceExists) return state;
   if (!state.channels.some((ch) => ch.id === destChannelId)) return state;
 
   // Per 1.5A: replace existing cable till samma dest-knob (en per knob)
@@ -333,15 +541,43 @@ export function setCableDepth(
 export function validateInvariants(state: MixerState): string[] {
   const issues: string[] = [];
   const lfoIds = new Set(state.lfos.map((l) => l.id));
+  const chainIds = new Set(state.chains.map((c) => c.id));
+  const modulatorIds = new Set([...lfoIds, ...chainIds]);
   const channelIds = new Set(state.channels.map((ch) => ch.id));
+
+  // Cable source-refs — accepterar både LFO och chain
   for (const cable of state.cables) {
-    if (!lfoIds.has(cable.sourceLfoId)) {
-      issues.push(`cable ${cable.id} pekar på obefintlig LFO ${cable.sourceLfoId}`);
+    if (!modulatorIds.has(cable.sourceLfoId)) {
+      issues.push(`cable ${cable.id} pekar på obefintlig modulator ${cable.sourceLfoId}`);
     }
     if (!channelIds.has(cable.destChannelId)) {
       issues.push(`cable ${cable.id} pekar på obefintlig channel ${cable.destChannelId}`);
     }
   }
+
+  // Chain source-refs — måste peka på LFO eller annan chain
+  for (const chain of state.chains) {
+    if (!modulatorIds.has(chain.sourceId)) {
+      issues.push(`chain ${chain.id} pekar på obefintlig source ${chain.sourceId}`);
+    }
+  }
+
+  // Chain cycle detection — walk source-grafen från varje chain
+  for (const chain of state.chains) {
+    const visited = new Set<string>();
+    let current: string | null = chain.id;
+    while (current) {
+      if (visited.has(current)) {
+        issues.push(`chain ${chain.id} ingår i en cycle (via ${current})`);
+        break;
+      }
+      visited.add(current);
+      const next: LfoChain | undefined = state.chains.find((c) => c.id === current);
+      if (!next) break; // reached LFO eller dangling
+      current = next.sourceId;
+    }
+  }
+
   // Knob modCableId references
   for (const ch of state.channels) {
     for (const knobName of ['pulseWidth', 'pace', 'amplitude'] as const) {

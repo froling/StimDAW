@@ -80,15 +80,25 @@ export function lfoColor(lfoIndex: number): string {
   return LFO_COLOR_PALETTE[lfoIndex % LFO_COLOR_PALETTE.length]!;
 }
 
+/** Färg för LfoChain-cables. Distinkt från LFO-paletten så user ser direkt
+ *  att en cable kommer från chain (slav) snarare än LFO (rate-rot). */
+export const CHAIN_COLOR = '#cc6600';
+
 /**
- * Lookup LFO-färg via id. Returnerar färg + label ("L1", "L2", etc.) för
- * a11y-textlabel mid-cable.
+ * Lookup modulator-färg + label via id. Returnerar färg + label
+ * ("L1", "L2", etc. för LFOs, "C1", "C2" för chains) för a11y-textlabel
+ * mid-cable.
+ *
+ * Source kan vara LFO eller LfoChain. ID-prefix avgör typen.
  */
 export function lfoColorAndLabel(
   lfos: readonly { id: string }[],
-  lfoId: string,
+  modulatorId: string,
+  chains: readonly { id: string }[] = [],
 ): { color: string; label: string } {
-  const index = lfos.findIndex((l) => l.id === lfoId);
-  if (index < 0) return { color: '#888', label: '?' };
-  return { color: lfoColor(index), label: `L${index + 1}` };
+  const lfoIdx = lfos.findIndex((l) => l.id === modulatorId);
+  if (lfoIdx >= 0) return { color: lfoColor(lfoIdx), label: `L${lfoIdx + 1}` };
+  const chainIdx = chains.findIndex((c) => c.id === modulatorId);
+  if (chainIdx >= 0) return { color: CHAIN_COLOR, label: `C${chainIdx + 1}` };
+  return { color: '#888', label: '?' };
 }

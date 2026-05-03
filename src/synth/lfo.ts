@@ -9,7 +9,8 @@
  * Per eng-review Hour 1: phase i radians (0..2π). Beräknas från lfo.phase
  * + ackumulerad delta sedan senast.
  */
-import type { LFO, WaveMode } from './types';
+import type { LFO, LfoChain, Modulator, WaveMode } from './types';
+import { isLfoChain } from './types';
 import { getWaveform } from './waveforms';
 
 const TWO_PI = Math.PI * 2;
@@ -84,4 +85,111 @@ export function reAnchorPhase(lfo: LFO, simNowMicros: number, oldAnchor: number)
   const dtSec = (simNowMicros - oldAnchor) / 1_000_000;
   const newPhase = (lfo.phase + TWO_PI * lfo.rate * dtSec) % TWO_PI;
   return { ...lfo, phase: newPhase };
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// LfoChain support — slav-modulator vars rate styrs av source-modulator
+// ──────────────────────────────────────────────────────────────────────
+
+/**
+ * Lookup modulator by id. Söker både i lfos och chains. ID-prefix
+ * (`lfo-N` / `chain-N`) gör det förutsägbart men vi söker linjärt för
+ * enkelhet — modulator-arrayer är typiskt små (<10).
+ */
+export function lookupModulator(
+  id: string,
+  lfos: readonly LFO[],
+  chains: readonly LfoChain[],
+): Modulator | undefined {
+  const lfo = lfos.find((l) => l.id === id);
+  if (lfo) return lfo;
+  return chains.find((c) => c.id === id);
+}
+
+/**
+ * Beräkna effective rate (Hz) för en modulator, rekursivt.
+ * För LFO: returnerar lfo.rate.
+ * För LfoChain: source.effectiveRate × (trigger === 'half' ? 2 : 1).
+ *
+ * Cycle-skydd via visited-set så infinite recursion förhindras vid bug
+ * i state-validering. Om dangling source eller cycle: returnerar 0.
+ */
+export function effectiveRate(
+  modulator: Modulator,
+  lfos: readonly LFO[],
+  chains: readonly LfoChain[],
+  visited: Set<string> = new Set(),
+): number {
+  if (visited.has(modulator.id)) return 0; // cycle protection
+  visited.add(modulator.id);
+
+  if (!isLfoChain(modulator)) {
+    return Number.isFinite(modulator.rate) ? modulator.rate : 0;
+  }
+  // Chain — resolve source recursively
+  const source = lookupModulator(modulator.sourceId, lfos, chains);
+  if (!source) return 0; // dangling
+  const srcRate = effectiveRate(source, lfos, chains, visited);
+  return srcRate * (modulator.trigger === 'half' ? 2 : 1);
+}
+
+/**
+ * Beräkna LfoChain output (-1..+1 × amount) vid simNow.
+ *
+ * Trigger-tempo:
+ *   trigger_interval = 1 / source_effective_rate × (trigger==='half' ? 0.5 : 1)
+ *
+ * Phase resets vid varje trigger:
+ *   phase_radians = ((t mod trigger_interval) / trigger_interval) × 2π
+ *
+ * Sedan: waveform(phase) → applyLfoMode → × amount.
+ *
+ * Returnerar 0 vid: dangling source, source rate ≤ 0, amount ≤ 0, eller
+ * cycle (skyddat via visited-set i effectiveRate).
+ */
+export function computeChainSignal(
+  chain: LfoChain,
+  tMicros: number,
+  lfos: readonly LFO[],
+  chains: readonly LfoChain[],
+): number {
+  if (!Number.isFinite(chain.amount) || chain.amount <= 0) return 0;
+  const source = lookupModulator(chain.sourceId, lfos, chains);
+  if (!source) return 0;
+
+  const srcRate = effectiveRate(source, lfos, chains);
+  if (srcRate <= 0 || !Number.isFinite(srcRate)) return 0;
+
+  // Source period (µs) → trigger interval
+  const sourcePeriodMicros = 1_000_000 / srcRate;
+  const triggerIntervalMicros =
+    chain.trigger === 'half' ? sourcePeriodMicros / 2 : sourcePeriodMicros;
+  if (triggerIntervalMicros <= 0) return 0;
+
+  // Wrap t till positivt intervall (handles negativa tMicros defensivt)
+  const tInInterval =
+    ((tMicros % triggerIntervalMicros) + triggerIntervalMicros) % triggerIntervalMicros;
+  const phaseRadians = (tInInterval / triggerIntervalMicros) * TWO_PI;
+
+  const wave = getWaveform(chain.shape);
+  const shaped = applyLfoMode(wave(phaseRadians), chain.mode);
+  return shaped * Math.min(1, Math.max(0, chain.amount));
+}
+
+/**
+ * Universell modulator-signal-evaluator. Dispatchar på modulator-typ.
+ * Returnerar samma -1..+1 × amount × ev. mode-transform som de underliggande
+ * compute-funktionerna. Synth-engine.evaluateKnob använder denna istället
+ * för att direkt anropa computeLfoSignal.
+ */
+export function computeModulatorSignal(
+  modulator: Modulator,
+  tMicros: number,
+  lfos: readonly LFO[],
+  chains: readonly LfoChain[],
+): number {
+  if (isLfoChain(modulator)) {
+    return computeChainSignal(modulator, tMicros, lfos, chains);
+  }
+  return computeLfoSignal(modulator, tMicros, modulator.phaseAnchorMicros);
 }

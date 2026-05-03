@@ -8,7 +8,7 @@
  * Följer samma mönster som src/ui/stores.svelte.ts (α2-shipping).
  */
 import * as state from '../../synth/state';
-import type { MixerState, WaveMode, WaveShape } from '../../synth/types';
+import type { ChainTrigger, MixerState, WaveMode, WaveShape } from '../../synth/types';
 import type { Elcon } from '../../patterns/types';
 
 class SynthStore {
@@ -96,6 +96,46 @@ export function setLfoShape(lfoId: string, shape: WaveShape): void {
 
 export function setLfoMode(lfoId: string, mode: WaveMode): void {
   synth.current = state.setLfoMode(synth.current, lfoId, mode);
+}
+
+// ── Chain actions ──────────────────────────────────────────────────
+
+export function addChain(
+  sourceId: string,
+  options: {
+    trigger?: ChainTrigger;
+    shape?: WaveShape;
+    amount?: number;
+    mode?: WaveMode;
+  } = {},
+): void {
+  synth.current = state.addChain(synth.current, sourceId, options);
+  // Notify engine om vi skapar mid-run så ingen extra setup behövs
+  // (chains har ingen runtime-state i engine, evaluateKnob läser direkt).
+}
+
+export function removeChain(chainId: string): void {
+  synth.current = state.removeChain(synth.current, chainId);
+}
+
+export function setChainSource(chainId: string, newSourceId: string): void {
+  synth.current = state.setChainSource(synth.current, chainId, newSourceId);
+}
+
+export function setChainTrigger(chainId: string, trigger: ChainTrigger): void {
+  synth.current = state.setChainTrigger(synth.current, chainId, trigger);
+}
+
+export function setChainShape(chainId: string, shape: WaveShape): void {
+  synth.current = state.setChainShape(synth.current, chainId, shape);
+}
+
+export function setChainAmount(chainId: string, amount: number): void {
+  synth.current = state.setChainAmount(synth.current, chainId, amount);
+}
+
+export function setChainMode(chainId: string, mode: WaveMode): void {
+  synth.current = state.setChainMode(synth.current, chainId, mode);
 }
 
 // ── Cable actions ──────────────────────────────────────────────────

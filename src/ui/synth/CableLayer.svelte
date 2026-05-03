@@ -102,7 +102,7 @@
 
     e.preventDefault();
     const pos = portPosition(portEl, containerEl);
-    const { color } = lfoColorAndLabel(synth.current.lfos, lfoId);
+    const { color } = lfoColorAndLabel(synth.current.lfos, lfoId, synth.current.chains);
     drag = {
       sourceLfoId: lfoId,
       sourcePos: pos,
@@ -238,7 +238,7 @@
   {#each synth.current.cables as cable (cable.id)}
     {@const endpoints = cableEndpoints.get(cable.id)}
     {#if endpoints}
-      {@const colorLabel = lfoColorAndLabel(synth.current.lfos, cable.sourceLfoId)}
+      {@const colorLabel = lfoColorAndLabel(synth.current.lfos, cable.sourceLfoId, synth.current.chains)}
       {@const mid = bezierMidpoint(
         endpoints.source.x,
         endpoints.source.y,

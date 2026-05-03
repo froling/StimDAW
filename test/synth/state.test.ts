@@ -324,6 +324,7 @@ test('validateInvariants: detekterar dangling cable till obefintlig LFO', () => 
   const invalid = {
     channels: [],
     lfos: [],
+    chains: [],
     cables: [{ id: 'c1', sourceLfoId: 'ghost', destChannelId: 'ghost-ch', destKnobName: 'pulseWidth' as const, depth: 0.5 }],
   };
   const issues = validateInvariants(invalid);

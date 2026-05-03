@@ -103,17 +103,62 @@ export interface ChannelRuntime {
 }
 
 /**
- * Cable: directed edge från LFO output till mixer-channel knob.
- * Per eng-review 1.5A: en cable per knob i β.0; drop på upptaget = replace.
+ * Trigger-mode för LfoChain — när chain:s waveform-cykel ska börja om
+ * relativt sin source. 'full' = vid varje hel-cykel av source. 'half' =
+ * vid varje halv-cykel (dubblar effective rate).
+ */
+export type ChainTrigger = 'full' | 'half';
+
+/**
+ * LfoChain — slav-modulator vars rate styrs av en source-modulator
+ * (LFO eller annan LfoChain). Har samma val som LFO (shape, mode,
+ * amount) men ingen egen rate. Triggrar fas-reset vid hel- eller halv-
+ * cykel av sin source. Kan kedjas djupt så långa pulståg byggs.
+ *
+ * Effective rate = source_effective_rate × (trigger === 'half' ? 2 : 1).
+ * Phase vid tid t = (t mod trigger_interval) / trigger_interval × 2π.
+ *
+ * sourceId pekar på id för en LFO ('lfo-N') eller LfoChain ('chain-N').
+ * Cycle detection vid addChain/setChainSource förhindrar self-ref + loops.
+ */
+export interface LfoChain {
+  readonly id: string;
+  /** Modulator-id (LFO eller annan LfoChain) som styr trigger-tempo. */
+  readonly sourceId: string;
+  /** När waveform-cykeln triggas relativt source-cykel. */
+  readonly trigger: ChainTrigger;
+  /** Master output gain 0..1, samma semantik som LFO.amount. */
+  readonly amount: number;
+  readonly shape: WaveShape;
+  /** Polaritets-mode (default 'bipolar'). */
+  readonly mode?: WaveMode;
+}
+
+/** Modulator-union: LFO (har egen rate) eller LfoChain (rate från source). */
+export type Modulator = LFO | LfoChain;
+
+/** Type-guard för att skilja LfoChain från LFO. ID-prefix-baserat. */
+export function isLfoChain(m: Modulator): m is LfoChain {
+  return m.id.startsWith('chain-');
+}
+
+/**
+ * Cable: directed edge från modulator (LFO eller LfoChain) output till
+ * mixer-channel knob. Per eng-review 1.5A: en cable per knob i β.0;
+ * drop på upptaget = replace.
+ *
+ * Fältnamnet sourceLfoId är historiskt — accepterar både 'lfo-N' och
+ * 'chain-N' som modulator-id. Lookup via prefix eller array-search.
  */
 export interface Cable {
   readonly id: string;
+  /** ID för source-modulator (LFO eller LfoChain). */
   readonly sourceLfoId: string;
   readonly destChannelId: string;
   readonly destKnobName: 'pulseWidth' | 'pace' | 'amplitude';
   /**
    * Per-cable depth 0..1 (Reason-style modulation amount knob på cable).
-   * Multiplicerar med lfo.amount → två gain-stages. Per eng-review E6.
+   * Multiplicerar med modulator.amount → två gain-stages. Per eng-review E6.
    */
   readonly depth: number;
 }
@@ -121,13 +166,17 @@ export interface Cable {
 /**
  * Top-level synth-state. UI-actions returnerar nya snapshots av denna.
  * Cascade-delete invariant (eng-review 2.4A): cables.every(c =>
- *   lfos.some(l => l.id === c.sourceLfoId) &&
+ *   (lfos.some(l => l.id === c.sourceLfoId) ||
+ *    chains.some(ch => ch.id === c.sourceLfoId)) &&
  *   channels.some(ch => ch.id === c.destChannelId)
  * )
+ * Plus: chains.every(c => c.sourceId resolves till existing LFO eller chain
+ * utan loop).
  */
 export interface MixerState {
   readonly channels: readonly MixerChannel[];
   readonly lfos: readonly LFO[];
+  readonly chains: readonly LfoChain[];
   readonly cables: readonly Cable[];
 }
 
