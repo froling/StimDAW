@@ -21,7 +21,7 @@ export function sine(phaseRadians: number): number {
 }
 
 /**
- * Sawtooth (rising). Output -1..+1, monotont stigande inom cykel.
+ * Sawtooth (rising/up-ramp). Output -1..+1, monotont stigande inom cykel.
  * saw(0) = -1, saw(π) = 0, saw(2π) ≈ -1 (wrap).
  *
  * Formel: 2 × (phase / 2π) - 1, med wrap.
@@ -29,6 +29,17 @@ export function sine(phaseRadians: number): number {
 export function saw(phaseRadians: number): number {
   const wrapped = ((phaseRadians % TWO_PI) + TWO_PI) % TWO_PI; // [0, 2π)
   return (wrapped / TWO_PI) * 2 - 1;
+}
+
+/**
+ * Sawtooth (falling/down-ramp) — invers av saw. Monotont fallande inom cykel.
+ * sawDown(0) = +1, sawDown(π) = 0, sawDown(2π-ε) → -1 (wrap till +1 vid 2π).
+ *
+ * Formel: 1 - 2 × (phase / 2π), med wrap. Spegling av saw runt y-axeln.
+ */
+export function sawDown(phaseRadians: number): number {
+  const wrapped = ((phaseRadians % TWO_PI) + TWO_PI) % TWO_PI;
+  return 1 - (wrapped / TWO_PI) * 2;
 }
 
 /**
@@ -60,13 +71,15 @@ export function triangle(phaseRadians: number): number {
 
 /** Map shape-string till waveform-funktion. Used by lfo.ts. */
 export function getWaveform(
-  shape: 'sine' | 'saw' | 'square' | 'triangle',
+  shape: 'sine' | 'saw' | 'saw-down' | 'square' | 'triangle',
 ): (phase: number) => number {
   switch (shape) {
     case 'sine':
       return sine;
     case 'saw':
       return saw;
+    case 'saw-down':
+      return sawDown;
     case 'square':
       return square;
     case 'triangle':

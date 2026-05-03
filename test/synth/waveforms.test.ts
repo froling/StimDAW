@@ -1,5 +1,5 @@
 import { test, expect } from 'bun:test';
-import { sine, saw, square, triangle, getWaveform } from '../../src/synth/waveforms';
+import { sine, saw, sawDown, square, triangle, getWaveform } from '../../src/synth/waveforms';
 
 const PI = Math.PI;
 const TWO_PI = PI * 2;
@@ -47,6 +47,34 @@ test('saw: wrap vid 2π återställer till -1', () => {
 test('saw: negativ phase wrappar korrekt', () => {
   expect(saw(-PI)).toBeCloseTo(0, 10); // -π ≡ π
   expect(saw(-TWO_PI)).toBeCloseTo(-1, 10); // -2π ≡ 0
+});
+
+// ── sawDown ─────────────────────────────────────────────────────────
+
+test('sawDown: monotont fallande inom cykel (+1 → -1)', () => {
+  expect(sawDown(0)).toBeCloseTo(1, 10);
+  expect(sawDown(PI / 2)).toBeCloseTo(0.5, 10);
+  expect(sawDown(PI)).toBeCloseTo(0, 10);
+  expect(sawDown(3 * PI / 2)).toBeCloseTo(-0.5, 10);
+});
+
+test('sawDown: wrap vid 2π återställer till +1', () => {
+  expect(sawDown(TWO_PI - 0.0001)).toBeLessThan(-0.99);
+  expect(sawDown(TWO_PI + 0.0001)).toBeCloseTo(1, 4);
+});
+
+test('sawDown: spegel av saw runt y-axeln (sawDown(t) === -saw(t))', () => {
+  for (const t of [0.1, PI / 4, PI / 2, PI, 4.5, 5.8]) {
+    expect(sawDown(t)).toBeCloseTo(-saw(t), 10);
+  }
+});
+
+test('sawDown: outputs i [-1, +1] över full cycle', () => {
+  for (let i = 0; i < 100; i++) {
+    const v = sawDown((i / 100) * TWO_PI);
+    expect(v).toBeGreaterThanOrEqual(-1);
+    expect(v).toBeLessThanOrEqual(1);
+  }
 });
 
 // ── square ──────────────────────────────────────────────────────────
@@ -98,6 +126,7 @@ test('triangle: outputs i [-1, +1] över full cycle', () => {
 test('getWaveform: returnerar rätt funktion per shape-string', () => {
   expect(getWaveform('sine')(PI / 2)).toBeCloseTo(1, 10);
   expect(getWaveform('saw')(0)).toBeCloseTo(-1, 10);
+  expect(getWaveform('saw-down')(0)).toBeCloseTo(1, 10);
   expect(getWaveform('square')(0)).toBe(1);
   expect(getWaveform('triangle')(PI / 2)).toBeCloseTo(1, 10);
 });

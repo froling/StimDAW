@@ -12,7 +12,22 @@
  */
 import type { Elcon } from '../patterns/types';
 
-export type WaveShape = 'sine' | 'saw' | 'square' | 'triangle';
+export type WaveShape = 'sine' | 'saw' | 'saw-down' | 'square' | 'triangle';
+
+/**
+ * Polaritets-mode för LFO output. Applicerat efter waveform-evaluering,
+ * före amount-skalning. Ger asymmetrisk kontroll över hur LFO påverkar
+ * channel-knob.
+ *
+ * - 'bipolar' (default): output ∈ [-1, +1]. Symmetrisk swing kring knob.base.
+ *   LFO kan både öka och minska channel-värdet.
+ * - 'negative-boost': negativ halva multipliceras med 2 → output ∈ [-2, +1].
+ *   Med depth=1 + amount=1 räcker swing för att bottnar channel även när
+ *   knob.base är högt (t.ex. amp=200/255 → kan nå 0). Positiv halva oförändrad.
+ * - 'negative-only': output mappas till [-1, 0] via (signal-1)/2.
+ *   LFO minskar bara channel, ökar aldrig. Vågformsskepnad bevarad.
+ */
+export type WaveMode = 'bipolar' | 'negative-boost' | 'negative-only';
 
 /**
  * Knob-state: user-set base + optional cable-modulering.
@@ -45,6 +60,12 @@ export interface LFO {
    * vid rate-byte så signalen är continuous över bytet (annars phase-glitch).
    */
   readonly phaseAnchorMicros: number;
+  /**
+   * Polaritets-mode (default 'bipolar'). Asymmetrisk transform applicerad
+   * efter waveform → ger boost-negative eller negative-only-modulering.
+   * Optional för back-compat med pre-existing LFO-snapshots.
+   */
+  readonly mode?: WaveMode;
 }
 
 /** Hardware/UX bounds för LFO rate. Synkat med LFOModule.svelte RATE_BOUNDS. */

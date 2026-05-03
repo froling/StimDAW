@@ -11,6 +11,7 @@ import {
   setLfoRate,
   setLfoAmount,
   setLfoShape,
+  setLfoMode,
   addCable,
   removeCable,
   setCableDepth,
@@ -170,6 +171,35 @@ test('setLfoRate: med simNow → re-ankrar phase så signal är continuous över
   expect(s.lfos[0]?.phaseAnchorMicros).toBe(250_000);
   // Verifiera continuity: computeLfoSignal vid t=250_000 ska ge sin(π/2)=1
   // (samma som FÖRE rate-byte).
+});
+
+test('addLfo: defaultar mode till bipolar', () => {
+  const s = addLfo(emptyState());
+  expect(s.lfos[0]?.mode).toBe('bipolar');
+});
+
+test('setLfoMode: byter mellan bipolar / negative-boost / negative-only', () => {
+  let s = addLfo(emptyState());
+  const id = s.lfos[0]!.id;
+  s = setLfoMode(s, id, 'negative-boost');
+  expect(s.lfos[0]?.mode).toBe('negative-boost');
+  s = setLfoMode(s, id, 'negative-only');
+  expect(s.lfos[0]?.mode).toBe('negative-only');
+  s = setLfoMode(s, id, 'bipolar');
+  expect(s.lfos[0]?.mode).toBe('bipolar');
+});
+
+test('setLfoMode: lämnar andra LFO-fält oförändrade', () => {
+  let s = addLfo(emptyState());
+  const id = s.lfos[0]!.id;
+  s = setLfoRate(s, id, 5);
+  s = setLfoAmount(s, id, 0.7);
+  s = setLfoShape(s, id, 'saw-down');
+  s = setLfoMode(s, id, 'negative-boost');
+  expect(s.lfos[0]?.rate).toBe(5);
+  expect(s.lfos[0]?.amount).toBe(0.7);
+  expect(s.lfos[0]?.shape).toBe('saw-down');
+  expect(s.lfos[0]?.mode).toBe('negative-boost');
 });
 
 test('setLfoAmount: clamps till [0, 1]', () => {

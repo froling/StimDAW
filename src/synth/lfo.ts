@@ -9,10 +9,35 @@
  * Per eng-review Hour 1: phase i radians (0..2π). Beräknas från lfo.phase
  * + ackumulerad delta sedan senast.
  */
-import type { LFO } from './types';
+import type { LFO, WaveMode } from './types';
 import { getWaveform } from './waveforms';
 
 const TWO_PI = Math.PI * 2;
+
+/**
+ * Polaritets-transform applicerad post-waveform, pre-amount.
+ *
+ * - bipolar (eller undefined): identity, output [-1, +1]
+ * - negative-boost: negativ halva × 2 → output [-2, +1]. Med depth=1 +
+ *   amount=1 räcker swing för att bottnar channel även när knob.base är
+ *   högt (t.ex. amp=200/255 → kan nå 0). Positiv halva oförändrad.
+ * - negative-only: shift+scale till [-1, 0] via (s-1)/2. Vågformskepnad
+ *   bevarad men output ≤ 0 garanterat (LFO minskar bara, ökar aldrig).
+ *
+ * Pure function — testbar isolerat.
+ */
+export function applyLfoMode(signal: number, mode: WaveMode | undefined): number {
+  switch (mode) {
+    case 'negative-boost':
+      return signal < 0 ? signal * 2 : signal;
+    case 'negative-only':
+      return (signal - 1) / 2;
+    case 'bipolar':
+    case undefined:
+    default:
+      return signal;
+  }
+}
 
 /**
  * Beräkna LFO output (-1..+1) vid simNow. Returnerar signal × amount
@@ -42,7 +67,9 @@ export function computeLfoSignal(
   const dtSec = (tMicros - phaseAnchorMicros) / 1_000_000;
   const phase = lfo.phase + TWO_PI * lfo.rate * dtSec;
   const wave = getWaveform(lfo.shape);
-  return wave(phase) * Math.min(1, Math.max(0, lfo.amount));
+  // Apply polarity-mode på rå waveform-output, sedan scale med amount.
+  const shaped = applyLfoMode(wave(phase), lfo.mode);
+  return shaped * Math.min(1, Math.max(0, lfo.amount));
 }
 
 /**

@@ -8,7 +8,7 @@
  * Följer samma mönster som src/ui/stores.svelte.ts (α2-shipping).
  */
 import * as state from '../../synth/state';
-import type { MixerState, WaveShape } from '../../synth/types';
+import type { MixerState, WaveMode, WaveShape } from '../../synth/types';
 import type { Elcon } from '../../patterns/types';
 
 class SynthStore {
@@ -92,6 +92,10 @@ export function setLfoAmount(lfoId: string, amount: number): void {
 
 export function setLfoShape(lfoId: string, shape: WaveShape): void {
   synth.current = state.setLfoShape(synth.current, lfoId, shape);
+}
+
+export function setLfoMode(lfoId: string, mode: WaveMode): void {
+  synth.current = state.setLfoMode(synth.current, lfoId, mode);
 }
 
 // ── Cable actions ──────────────────────────────────────────────────

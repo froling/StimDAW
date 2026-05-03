@@ -19,6 +19,7 @@ import type {
   LFO,
   MixerChannel,
   MixerState,
+  WaveMode,
   WaveShape,
 } from './types';
 import { KNOB_DEFAULTS, LFO_RATE_MIN_HZ, LFO_RATE_MAX_HZ } from './types';
@@ -137,6 +138,7 @@ export function addLfo(state: MixerState, shape: WaveShape = 'sine'): MixerState
     shape,
     phase: 0,
     phaseAnchorMicros: 0,
+    mode: 'bipolar',
   };
   return { ...state, lfos: [...state.lfos, lfo] };
 }
@@ -223,6 +225,14 @@ export function setLfoShape(state: MixerState, lfoId: string, shape: WaveShape):
   return {
     ...state,
     lfos: state.lfos.map((l) => (l.id !== lfoId ? l : { ...l, shape })),
+  };
+}
+
+/** Sätt LFO polaritets-mode (bipolar / negative-boost / negative-only). */
+export function setLfoMode(state: MixerState, lfoId: string, mode: WaveMode): MixerState {
+  return {
+    ...state,
+    lfos: state.lfos.map((l) => (l.id !== lfoId ? l : { ...l, mode })),
   };
 }
 

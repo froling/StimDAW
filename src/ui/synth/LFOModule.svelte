@@ -1,7 +1,7 @@
 <script lang="ts">
   import Knob from './Knob.svelte';
-  import { setLfoRate, setLfoAmount, setLfoShape, removeLfo } from './synth-store.svelte';
-  import type { LFO, WaveShape } from '../../synth/types';
+  import { setLfoRate, setLfoAmount, setLfoShape, setLfoMode, removeLfo } from './synth-store.svelte';
+  import type { LFO, WaveMode, WaveShape } from '../../synth/types';
 
   type Props = {
     lfo: LFO;
@@ -15,13 +15,47 @@
   const RATE_BOUNDS = { min: 0.01, max: 50 } as const;
   const AMOUNT_BOUNDS = { min: 0, max: 1 } as const;
 
-  const SHAPES: WaveShape[] = ['sine', 'saw', 'square', 'triangle'];
+  const SHAPES: WaveShape[] = ['sine', 'saw', 'saw-down', 'square', 'triangle'];
   const SHAPE_GLYPHS: Record<WaveShape, string> = {
     sine: '∿',
     saw: '◢',
+    'saw-down': '◣',
     square: '⊓',
     triangle: '△',
   };
+  const SHAPE_LABELS: Record<WaveShape, string> = {
+    sine: 'sine',
+    saw: 'saw up',
+    'saw-down': 'saw down',
+    square: 'square',
+    triangle: 'triangle',
+  };
+
+  // Polaritets-mode: bipolar (default) | negative-boost | negative-only
+  type ModeOption = { value: WaveMode; glyph: string; label: string; tooltip: string };
+  const MODES: ModeOption[] = [
+    {
+      value: 'bipolar',
+      glyph: '↕',
+      label: 'BI',
+      tooltip: 'Bipolar — symmetrisk swing kring knob.base (default)',
+    },
+    {
+      value: 'negative-boost',
+      glyph: '↡',
+      label: '−2',
+      tooltip: 'Boost negative — dubblar negativ halva. Channel kan bottna även med högt knob-base. Positiv halva oförändrad.',
+    },
+    {
+      value: 'negative-only',
+      glyph: '↓',
+      label: '−',
+      tooltip: 'Negative only — LFO minskar bara channel, ökar aldrig. Vågformsskepnad bevarad i [-1, 0]-range.',
+    },
+  ];
+
+  // Default 'bipolar' om mode saknas (back-compat med pre-existing LFOs)
+  let currentMode = $derived(lfo.mode ?? 'bipolar');
 
   function setRate(rate: number): void {
     setLfoRate(lfo.id, rate);
@@ -33,6 +67,10 @@
 
   function pickShape(shape: WaveShape): void {
     setLfoShape(lfo.id, shape);
+  }
+
+  function pickMode(mode: WaveMode): void {
+    setLfoMode(lfo.id, mode);
   }
 
   function onRemove(): void {
@@ -64,12 +102,31 @@
         class="shape-btn"
         class:active={lfo.shape === shape}
         onclick={() => pickShape(shape)}
-        title={shape}
-        aria-label={shape}
+        title={SHAPE_LABELS[shape]}
+        aria-label={SHAPE_LABELS[shape]}
         role="radio"
         aria-checked={lfo.shape === shape}
       >
         {SHAPE_GLYPHS[shape]}
+      </button>
+    {/each}
+  </div>
+
+  <div class="mode-picker" role="radiogroup" aria-label="Polarity mode">
+    {#each MODES as opt}
+      <button
+        class="mode-btn"
+        class:active={currentMode === opt.value}
+        onclick={() => pickMode(opt.value)}
+        title={opt.tooltip}
+        aria-label={opt.value}
+        role="radio"
+        aria-checked={currentMode === opt.value}
+        data-testid="lfo-mode-btn"
+        data-mode={opt.value}
+      >
+        <span class="mode-glyph">{opt.glyph}</span>
+        <span class="mode-label">{opt.label}</span>
       </button>
     {/each}
   </div>
@@ -175,6 +232,46 @@
     background: white;
     color: var(--lfo-color);
     box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+  }
+
+  .mode-picker {
+    display: flex;
+    gap: 2px;
+    padding: 2px;
+    background: #fafafa;
+    border-radius: 4px;
+  }
+  .mode-btn {
+    flex: 1;
+    background: transparent;
+    border: none;
+    padding: 0.2rem 0;
+    cursor: pointer;
+    color: #888;
+    border-radius: 3px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.2rem;
+    font-family: ui-monospace, monospace;
+  }
+  .mode-btn:hover {
+    background: #f0f0f0;
+    color: #333;
+  }
+  .mode-btn.active {
+    background: white;
+    color: var(--lfo-color);
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+  }
+  .mode-glyph {
+    font-size: 0.85rem;
+    line-height: 1;
+  }
+  .mode-label {
+    font-size: 0.62rem;
+    font-weight: 600;
+    letter-spacing: 0.04em;
   }
 
   .knobs {
