@@ -160,6 +160,96 @@ test('engine: emit fortsätter på pace-intervaller', () => {
   expect(rig.emitted.length).toBe(5); // initial + 4 paces (0, 25k, 50k, 75k, 100k)
 });
 
+// ── Skip-emit när amp=0 (fader-at-zero / muted via fader) ───────────
+
+test('engine: skippar emit när amp=0 men fortsätter scheduling', () => {
+  // Channel med amp=0 skall inte emitter empty descriptors
+  let s = emptyState();
+  s = addChannel(s, [ElectrodeMask.A, ElectrodeMask.B]);
+  // Sätt amp=0 (override från default 128)
+  const chId = s.channels[0]!.id;
+  s = {
+    ...s,
+    channels: s.channels.map((ch) =>
+      ch.id !== chId
+        ? ch
+        : { ...ch, knobs: { ...ch.knobs, amplitude: { base: 0, modCableId: null } } },
+    ),
+  };
+  const rig = makeRig(s);
+  rig.engine.start();
+  rig.clock.advance(100_000); // 100ms — skulle ge 5 emits med amp>0
+
+  // Inga emits eftersom amp=0 efter clamp
+  expect(rig.emitted.length).toBe(0);
+  // Men engine kör fortfarande (scheduling fortsätter, kan resumera när amp lyfts)
+  expect(rig.engine.isRunning()).toBe(true);
+});
+
+test('engine: lyft amp från 0 mid-run → emits resumerar', () => {
+  let s = emptyState();
+  s = addChannel(s, [ElectrodeMask.A, ElectrodeMask.B]);
+  const chId = s.channels[0]!.id;
+  // Start med amp=0
+  s = {
+    ...s,
+    channels: s.channels.map((ch) =>
+      ch.id !== chId
+        ? ch
+        : { ...ch, knobs: { ...ch.knobs, amplitude: { base: 0, modCableId: null } } },
+    ),
+  };
+  const rig = makeRig(s);
+  rig.engine.start();
+  rig.clock.advance(50_000); // tystnad
+  expect(rig.emitted.length).toBe(0);
+
+  // Lyft amp till 128 — engine läser senaste state vid varje emit-evaluering
+  rig.setState({
+    ...rig.state,
+    channels: rig.state.channels.map((ch) =>
+      ch.id !== chId
+        ? ch
+        : { ...ch, knobs: { ...ch.knobs, amplitude: { base: 128, modCableId: null } } },
+    ),
+  });
+  rig.clock.advance(50_000); // 2 paces vid 25ms — bör ge ~2 emits
+  expect(rig.emitted.length).toBeGreaterThan(0);
+});
+
+test('engine: phase-flip körs INTE för skipped pulses (DC-stim safety)', () => {
+  // Om vi flippar phase även när vi skippar pulser blir nästa emit fel phase.
+  // Sequence: [skip @ amp=0, emit @ amp=128, emit @ amp=128] måste ge phase
+  // [skipped, 0, 1] inte [flipped-but-not-emitted, 1, 0].
+  let s = emptyState();
+  s = addChannel(s, [ElectrodeMask.A, ElectrodeMask.B]);
+  const chId = s.channels[0]!.id;
+  s = {
+    ...s,
+    channels: s.channels.map((ch) =>
+      ch.id !== chId
+        ? ch
+        : { ...ch, knobs: { ...ch.knobs, amplitude: { base: 0, modCableId: null } } },
+    ),
+  };
+  const rig = makeRig(s);
+  rig.engine.start();
+  rig.clock.advance(50_000); // 2-3 skipped pulses
+  // Lyft amp
+  rig.setState({
+    ...rig.state,
+    channels: rig.state.channels.map((ch) =>
+      ch.id !== chId
+        ? ch
+        : { ...ch, knobs: { ...ch.knobs, amplitude: { base: 128, modCableId: null } } },
+    ),
+  });
+  rig.clock.advance(50_000);
+  // Första EMIT ska vara phase=0 (lastPhase=1 initial → flip → 0).
+  // Om vi hade flippat på skipped pulses skulle första emit blivit phase=1.
+  expect(rig.emitted[0]?.phase).toBe(0);
+});
+
 test('engine: phase alternates 0,1,0,1 per emit (GAP-A, CRITICAL safety)', () => {
   let s = emptyState();
   s = addChannel(s, [ElectrodeMask.A, ElectrodeMask.B]);

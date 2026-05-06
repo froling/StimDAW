@@ -162,7 +162,22 @@ export class SynthEngine {
       this.opts.getCeilingPercent(),
     );
 
-    // Per-channel polarity-flip (eng-review 2.1A — undviker DC-stim)
+    // Schedule next emit FIRST så scheduling-kedjan fortsätter även om
+    // vi skip:ar denna pulse (amp=0 efter clamp).
+    const nextEmit = tMicros + paceEffective;
+    runtime.nextEmitMicros = nextEmit;
+    this.scheduleEmit(channelId, nextEmit);
+
+    // Skip-emit när amp=0 (mixer-fader på noll, eller LFO-modulation
+    // svingar ner till 0). amp=0-descriptors tolkas av firmware som
+    // "behåll tidigare voltage", inte "tystnad" — så att skicka dem är
+    // fel semantik för en muted/silent channel. Skippa istället så
+    // firmware-queue inte fylls med no-op-pulser.
+    if (amp === 0) return;
+
+    // Per-channel polarity-flip (eng-review 2.1A — undviker DC-stim).
+    // Endast när vi faktiskt emit:ar — phase-flip på skipped pulses
+    // skulle fortfarande ge DC-stim när amp lyfts från 0.
     const newPhase = (runtime.lastPhase ^ 1) as 0 | 1;
     runtime.lastPhase = newPhase;
 
@@ -180,12 +195,6 @@ export class SynthEngine {
       deltaPulseWidthQuarters: 0,
       deltaPaceMicros: 0,
     };
-
-    // Schedule next emit FÖRE sink så ett sink-throw inte bryter scheduling-
-    // kedjan permanent (channel skulle annars bli tyst för alltid).
-    const nextEmit = tMicros + paceEffective;
-    runtime.nextEmitMicros = nextEmit;
-    this.scheduleEmit(channelId, nextEmit);
 
     try {
       this.opts.sink(descriptor);

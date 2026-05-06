@@ -6,6 +6,7 @@
     addLfo,
     addChain,
     setActiveSource,
+    updateKnobBase,
   } from './synth/synth-store.svelte';
   import MixerChannel from './synth/MixerChannel.svelte';
   import LFOModule from './synth/LFOModule.svelte';
@@ -30,16 +31,40 @@
   let containerEl = $state<HTMLElement | null>(null);
 
   /**
-   * F2 seed-state: 1 channel + 1 LFO vid FÖRSTA mount om allt är tomt.
-   * onMount istället för $effect så seed inte re-fires om user senare
-   * raderar allt manuellt (surprising UX att defaults plötsligt återkommer).
+   * Mixerbord-seed: 9 fasta channels för de hardware-valid elcon-konfigs +
+   * 1 default LFO. Alla channels startar med AMP=0 (fader på noll, no-op
+   * descriptors skippas av engine). Användaren lyfter fadern på de
+   * channels de vill aktivera — som ett vanligt mixerbord.
+   *
+   * onMount istället för $effect så seed inte re-fires vid manuell
+   * mute/cleanup. Om user lägger till en chain eller modifierar något
+   * och sedan tömmer state (oklar future-feature), körs seed igen
+   * eftersom guard kollar BÅDA tomma.
    */
+  const HARDWARE_VALID_ELCONS: readonly Elcon[] = [
+    [ElectrodeMask.A, ElectrodeMask.B],
+    [ElectrodeMask.A, ElectrodeMask.D],
+    [ElectrodeMask.C, ElectrodeMask.B],
+    [ElectrodeMask.C, ElectrodeMask.D],
+    [ElectrodeMask.A, ElectrodeMask.BD],
+    [ElectrodeMask.C, ElectrodeMask.BD],
+    [ElectrodeMask.AC, ElectrodeMask.B],
+    [ElectrodeMask.AC, ElectrodeMask.D],
+    [ElectrodeMask.AC, ElectrodeMask.BD],
+  ] as const;
+
   onMount(() => {
     if (synth.current.channels.length === 0 && synth.current.lfos.length === 0) {
-      // Seed med full quadrupole AC↔BD — alla 4 elektroder aktiva, mest
-      // "dense" stim. Notera: tidigare seed [A, C] var hardware-INVALID
-      // (A och C är båda på T+ sidan, kan ej vara opposite poles).
-      addChannel([ElectrodeMask.AC, ElectrodeMask.BD]);
+      // Seed alla 9 channels först, sätt deras AMP=0 efter (KNOB_DEFAULTS
+      // ger 128 vid addChannel — vi overrider för fader-at-zero-default).
+      for (const elcon of HARDWARE_VALID_ELCONS) {
+        addChannel(elcon);
+      }
+      // AMP=0 för alla channels så de är tysta från start (engine skippar
+      // emit när amp=0 efter clamp). User lyfter fadern på de de vill ha.
+      for (const ch of synth.current.channels) {
+        updateKnobBase(ch.id, 'amplitude', 0);
+      }
       addLfo('sine');
     }
   });
