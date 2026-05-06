@@ -16,6 +16,7 @@ import { buildCsvFilename } from './csv-filename';
 import { SynthEngine } from '../synth/synth-engine';
 import { RealtimeClock } from '../synth/clock';
 import { synth, attachEngineHooks } from './synth/synth-store.svelte';
+import { computeDispatchRate } from '../synth/dispatch-stats';
 import { buildFrame } from '../oscilloscope/frame-builder';
 import { buildPolarFrame, type PolarFrame } from '../oscilloscope/polar-frame';
 import { buildEnvelopeFrame, type EnvelopeFrame } from '../oscilloscope/envelope-frame';
@@ -121,6 +122,14 @@ class AppState {
    * Off by default — minst 40 emits/s från aktiv mixer skulle flooda console.
    */
   logDescriptors = $state<boolean>(false);
+  /**
+   * Descriptors per sekund (rolling 1s window). Updated 30Hz från frame-tick.
+   * Indikator för dataström-tryck mot firmware. PtQueue 20 slots × 2 phases →
+   * DPS > 60 riskerar overflow. Visas tone-coded i MonitorBar.
+   */
+  dispatchRateHz = $state<number>(0);
+  /** Approximativ wire-bandwidth (bytes/sec) baserat på dispatchRateHz. */
+  dispatchBytesPerSec = $state<number>(0);
 }
 
 /** Cap så att en tre-timmars patternrun inte sväller minnet — räcker för dev. */
@@ -393,6 +402,12 @@ function runFrameTick(): void {
     pendingDispatched.length = 0;
   }
 
+  // Update dispatch-rate metrics (rolling 1s window)
+  const wallNowMicros = performance.now() * 1000;
+  const rate = computeDispatchRate(app.dispatchedDescriptors, wallNowMicros);
+  app.dispatchRateHz = rate.dps;
+  app.dispatchBytesPerSec = rate.bytesPerSec;
+
   // 2. Bygg ny frame om vi har stream-origin
   if (
     app.streamTimeOriginMicros === null ||
@@ -401,8 +416,7 @@ function runFrameTick(): void {
     // Ingen aktiv stream — bevarar senaste frame om sådan finns, annars null
     return;
   }
-  const wallNow = performance.now() * 1000;
-  const streamNow = wallNow - app.streamOriginWallMicros;
+  const streamNow = wallNowMicros - app.streamOriginWallMicros;
   const inputs = {
     dispatched: app.dispatchedDescriptors,
     voltageHistory: app.voltageHistory,
@@ -443,6 +457,8 @@ function purgeOscilloscopeState(): void {
   app.oscilloscopeFrame = null;
   app.envelopeFrame = null;
   app.polarFrame = null;
+  app.dispatchRateHz = 0;
+  app.dispatchBytesPerSec = 0;
 }
 
 /**

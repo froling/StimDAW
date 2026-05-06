@@ -11,8 +11,10 @@
    *   Vbat:  < 7000 mV  → låg batterivarning (gul)
    *   Vcap:  > 12 000 mV → spike-larm (röd; Brief §12)
    *   Iprim: > 1000 mA  → överströmning (röd; Brief §12)
+   *   Rate:  > 60 dps   → PtQueue overflow-risk (röd; håll < 40 stabilt)
    */
   import { app } from './stores.svelte';
+  import { dispatchRateTone } from '../synth/dispatch-stats';
 
   type Tone = 'ok' | 'warn' | 'alarm';
 
@@ -35,6 +37,7 @@
   let vbatTrace = $derived(vbatTone(app.voltages.Vbat_mV));
   let vcapTrace = $derived(vcapTone(app.voltages.Vcap_mV));
   let iprimTrace = $derived(iprimTone(app.voltages.Iprim_mA));
+  let rateTrace = $derived(dispatchRateTone(app.dispatchRateHz));
 
   function connectionLabel(state: string): string {
     if (state === 'connected') return 'connected';
@@ -63,6 +66,15 @@
   <span class="metric tone-{iprimTrace}" title="Primary current (alarm > 1A)">
     <span class="metric-label">Iprim</span>
     <span class="metric-value">{app.voltages.Iprim_mA}mA</span>
+  </span>
+  <span class="sep">·</span>
+  <span
+    class="metric tone-{rateTrace}"
+    title="Descriptor stream rate to firmware (warn > 40/s, alarm > 60/s — PtQueue overflow risk)"
+    data-testid="monitor-rate"
+  >
+    <span class="metric-label">Rate</span>
+    <span class="metric-value">{app.dispatchRateHz}/s</span>
   </span>
 </div>
 
