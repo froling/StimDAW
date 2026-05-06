@@ -3,7 +3,7 @@
  *
  * Verifierar:
  * - effectiveRate rekursiv (LFO → chain → chain)
- * - computeChainSignal: trigger='full' & 'half' phase-reset
+ * - computeChainSignal: trigger sync/offset/alternate semantik
  * - lookupModulator hittar både LFOs och chains
  * - addChain: cycle-detection + dangling source-rejection
  * - removeChain + removeLfo: transitiv cascade-delete med cables
@@ -65,37 +65,45 @@ test('effectiveRate för LFO returnerar lfo.rate', () => {
   expect(effectiveRate(lfo, s.lfos, s.chains)).toBe(5);
 });
 
-test('effectiveRate för chain (trigger=full) = source rate', () => {
+test('effectiveRate för chain (trigger=sync) = source rate', () => {
   let s = addLfo(emptyState()); // 1Hz default
   s = setLfoRate(s, 'lfo-1', 2);
-  s = addChain(s, 'lfo-1', { trigger: 'full' });
+  s = addChain(s, 'lfo-1', { trigger: 'sync' });
   const chain = s.chains[0]!;
   expect(effectiveRate(chain, s.lfos, s.chains)).toBe(2);
 });
 
-test('effectiveRate för chain (trigger=half) = source rate × 2', () => {
+test('effectiveRate för chain (trigger=offset) = source rate (samma som sync)', () => {
   let s = setLfoRate(addLfo(emptyState()), 'lfo-1', 2);
-  s = addChain(s, 'lfo-1', { trigger: 'half' });
+  s = addChain(s, 'lfo-1', { trigger: 'offset' });
+  const chain = s.chains[0]!;
+  expect(effectiveRate(chain, s.lfos, s.chains)).toBe(2);
+});
+
+test('effectiveRate för chain (trigger=alternate) = source rate × 2', () => {
+  let s = setLfoRate(addLfo(emptyState()), 'lfo-1', 2);
+  s = addChain(s, 'lfo-1', { trigger: 'alternate' });
   const chain = s.chains[0]!;
   expect(effectiveRate(chain, s.lfos, s.chains)).toBe(4);
 });
 
-test('effectiveRate för nested chains: rates multipliceras', () => {
+test('effectiveRate för nested chains: bara ALT multiplicerar rate', () => {
   let s = setLfoRate(addLfo(emptyState()), 'lfo-1', 1); // 1Hz
-  s = addChain(s, 'lfo-1', { trigger: 'half' }); // chain-2: 2Hz
-  s = addChain(s, 'chain-2', { trigger: 'half' }); // chain-3: 4Hz
-  s = addChain(s, 'chain-3', { trigger: 'full' }); // chain-4: 4Hz (full inherits)
+  s = addChain(s, 'lfo-1', { trigger: 'alternate' }); // chain-2: 2Hz
+  s = addChain(s, 'chain-2', { trigger: 'alternate' }); // chain-3: 4Hz
+  s = addChain(s, 'chain-3', { trigger: 'sync' }); // chain-4: 4Hz (sync inherits)
+  s = addChain(s, 'chain-4', { trigger: 'offset' }); // chain-5: 4Hz (offset inherits)
   expect(effectiveRate(s.chains[0]!, s.lfos, s.chains)).toBe(2);
   expect(effectiveRate(s.chains[1]!, s.lfos, s.chains)).toBe(4);
   expect(effectiveRate(s.chains[2]!, s.lfos, s.chains)).toBe(4);
+  expect(effectiveRate(s.chains[3]!, s.lfos, s.chains)).toBe(4);
 });
 
 test('effectiveRate returnerar 0 vid dangling source', () => {
-  // Konstruera invalid chain manuellt (utan addChain-validering)
   const dangling: LfoChain = {
     id: 'chain-99',
     sourceId: 'lfo-nonexistent',
-    trigger: 'full',
+    trigger: 'sync',
     shape: 'sine',
     amount: 1,
     mode: 'bipolar',
@@ -103,58 +111,124 @@ test('effectiveRate returnerar 0 vid dangling source', () => {
   expect(effectiveRate(dangling, [], [dangling])).toBe(0);
 });
 
-// ── computeChainSignal ──────────────────────────────────────────────
+// ── computeChainSignal: SYNC mode ───────────────────────────────────
 
-test('computeChainSignal: trigger=full vid t=0 → phase=0 → sine=0', () => {
-  let s = addLfo(emptyState()); // 1Hz
-  s = addChain(s, 'lfo-1', { trigger: 'full', shape: 'sine' });
+test('computeChainSignal SYNC: t=0 → phase=0 → sine=0', () => {
+  let s = addLfo(emptyState());
+  s = addChain(s, 'lfo-1', { trigger: 'sync', shape: 'sine' });
   const chain = s.chains[0]!;
   expect(computeChainSignal(chain, 0, s.lfos, s.chains)).toBeCloseTo(0, 6);
 });
 
-test('computeChainSignal: trigger=full @ source=1Hz, t=250ms → phase=π/2 → sine=+1', () => {
-  let s = addLfo(emptyState()); // 1Hz LFO → trigger interval = 1s = 1_000_000µs
-  s = addChain(s, 'lfo-1', { trigger: 'full', shape: 'sine' });
+test('computeChainSignal SYNC @ source=1Hz, t=250ms → phase=π/2 → sine=+1', () => {
+  let s = addLfo(emptyState());
+  s = addChain(s, 'lfo-1', { trigger: 'sync', shape: 'sine' });
   const chain = s.chains[0]!;
-  // t=250_000µs (kvart-cykel) → phase = 0.25 × 2π = π/2 → sin = +1
   expect(computeChainSignal(chain, 250_000, s.lfos, s.chains)).toBeCloseTo(1, 6);
 });
 
-test('computeChainSignal: trigger=half resets phase vid halv-cykel', () => {
-  let s = addLfo(emptyState()); // 1Hz, trigger interval = 0.5s med half
-  s = addChain(s, 'lfo-1', { trigger: 'half', shape: 'sine' });
+test('computeChainSignal SYNC kontinuerligt — spelar även när source är negativ', () => {
+  // SYNC har INGEN gate; chain kör hela tiden
+  let s = addLfo(emptyState());
+  s = addChain(s, 'lfo-1', { trigger: 'sync', shape: 'sine' });
   const chain = s.chains[0]!;
-  // Vid t=0: phase=0 → sine=0
-  expect(computeChainSignal(chain, 0, s.lfos, s.chains)).toBeCloseTo(0, 6);
-  // Vid t=125ms (kvart av 0.5s) → phase=π/2 → sine=+1
-  expect(computeChainSignal(chain, 125_000, s.lfos, s.chains)).toBeCloseTo(1, 6);
-  // Vid t=500_000µs (= ny trigger boundary) → phase=0 igen → sine=0
-  expect(computeChainSignal(chain, 500_000, s.lfos, s.chains)).toBeCloseTo(0, 6);
-  // Vid t=625ms = 500ms + 125ms = phase π/2 igen → sine=+1
-  expect(computeChainSignal(chain, 625_000, s.lfos, s.chains)).toBeCloseTo(1, 6);
+  // Vid t=750ms source=-1 men chain SYNC ger sine(3π/2) = -1 (inte 0)
+  expect(computeChainSignal(chain, 750_000, s.lfos, s.chains)).toBeCloseTo(-1, 6);
 });
 
-test('computeChainSignal: amount skalar output', () => {
+// ── computeChainSignal: OFFSET mode ─────────────────────────────────
+
+test('computeChainSignal OFFSET = matematisk invers för sine source+chain', () => {
   let s = addLfo(emptyState());
-  s = addChain(s, 'lfo-1', { trigger: 'full', shape: 'sine', amount: 0.5 });
+  s = addChain(s, 'lfo-1', { trigger: 'offset', shape: 'sine' });
+  const chain = s.chains[0]!;
+  // Sine source @ 1Hz med chain OFFSET sine → output = -source_signal
+  // t=0: source=0, chain phase=π → sine(π)=0 ✓
+  expect(computeChainSignal(chain, 0, s.lfos, s.chains)).toBeCloseTo(0, 6);
+  // t=250ms: source=+1, chain phase=π/2+π=3π/2 → sine=-1 ✓
+  expect(computeChainSignal(chain, 250_000, s.lfos, s.chains)).toBeCloseTo(-1, 6);
+  // t=500ms: source=0, chain phase=π+π=2π=0 → sine=0
+  expect(computeChainSignal(chain, 500_000, s.lfos, s.chains)).toBeCloseTo(0, 6);
+  // t=750ms: source=-1, chain phase=3π/2+π=5π/2≡π/2 → sine=+1 (invers av source)
+  expect(computeChainSignal(chain, 750_000, s.lfos, s.chains)).toBeCloseTo(1, 6);
+});
+
+// ── computeChainSignal: ALTERNATE mode ──────────────────────────────
+
+test('computeChainSignal ALT: gated av source-sign — silent när source ≥ 0', () => {
+  // Sine source @ 1Hz är positiv 0..500ms, negativ 500..1000ms
+  let s = addLfo(emptyState());
+  s = addChain(s, 'lfo-1', { trigger: 'alternate', shape: 'square' });
+  const chain = s.chains[0]!;
+  // t=0: source=0 (≥0) → gate OFF → 0
+  expect(computeChainSignal(chain, 0, s.lfos, s.chains)).toBe(0);
+  // t=125ms: source=+0.707 → gate OFF → 0
+  expect(computeChainSignal(chain, 125_000, s.lfos, s.chains)).toBe(0);
+  // t=250ms: source=+1 → gate OFF → 0
+  expect(computeChainSignal(chain, 250_000, s.lfos, s.chains)).toBe(0);
+  // t=499ms: source≈+0.006 (>0) → gate OFF → 0
+  expect(computeChainSignal(chain, 499_000, s.lfos, s.chains)).toBe(0);
+});
+
+test('computeChainSignal ALT: spelar med 2× rate under source-negativa halvan', () => {
+  // Sine source 1Hz, chain ALT shape=square. Under t=500..1000ms (source<0):
+  // halfPeriod=500ms → tInHalf = (t mod 500ms). Square +1 vid phase 0..π,
+  // -1 vid π..2π. tInHalf < 250ms = phase < π = +1; ≥ 250ms = -1.
+  let s = addLfo(emptyState());
+  s = addChain(s, 'lfo-1', { trigger: 'alternate', shape: 'square' });
+  const chain = s.chains[0]!;
+  // t=625ms: source=sin(5π/4)=-0.707 → gate ON.
+  // tInHalf = 625000 mod 500000 = 125000. phase = 125000/500000 × 2π = π/2.
+  // square(π/2) = +1
+  expect(computeChainSignal(chain, 625_000, s.lfos, s.chains)).toBe(1);
+  // t=875ms: source=sin(7π/4)=-0.707 → gate ON.
+  // tInHalf = 375000. phase = 3π/2. square(3π/2) = -1
+  expect(computeChainSignal(chain, 875_000, s.lfos, s.chains)).toBe(-1);
+});
+
+test('computeChainSignal ALT: alternation med saw-up source (negativ första halvan)', () => {
+  // Saw-up source: signal < 0 under första halvan av cykeln (0..500ms vid 1Hz)
+  let s = addLfo(emptyState());
+  s = { ...s, lfos: s.lfos.map((l) => ({ ...l, shape: 'saw' as const })) };
+  s = addChain(s, 'lfo-1', { trigger: 'alternate', shape: 'square' });
+  const chain = s.chains[0]!;
+  // t=125ms: source=saw(2π × 0.125)=saw(π/4) ≈ -0.75 (rising mot 0) → gate ON
+  // tInHalf=125000. phase=π/2. square=+1
+  expect(computeChainSignal(chain, 125_000, s.lfos, s.chains)).toBe(1);
+  // t=750ms: source=saw(3π/2)=+0.5 → gate OFF → 0
+  expect(computeChainSignal(chain, 750_000, s.lfos, s.chains)).toBe(0);
+});
+
+test('computeChainSignal ALT: amount skalar output', () => {
+  let s = addLfo(emptyState());
+  s = addChain(s, 'lfo-1', { trigger: 'alternate', shape: 'square', amount: 0.5 });
+  const chain = s.chains[0]!;
+  // Under gate-on med square +1, amount=0.5 → 0.5
+  expect(computeChainSignal(chain, 625_000, s.lfos, s.chains)).toBe(0.5);
+});
+
+test('computeChainSignal SYNC: amount skalar output', () => {
+  let s = addLfo(emptyState());
+  s = addChain(s, 'lfo-1', { trigger: 'sync', shape: 'sine', amount: 0.5 });
   const chain = s.chains[0]!;
   expect(computeChainSignal(chain, 250_000, s.lfos, s.chains)).toBeCloseTo(0.5, 6);
 });
 
-test('computeChainSignal: nested chain ärver tempo', () => {
+test('computeChainSignal SYNC: nested chain ärver tempo (ALT-link i kedjan dubblar)', () => {
   let s = addLfo(emptyState()); // 1Hz
-  s = addChain(s, 'lfo-1', { trigger: 'half', shape: 'sine' }); // chain-2: 2Hz
-  s = addChain(s, 'chain-2', { trigger: 'half', shape: 'sine' }); // chain-3: 4Hz, period 250ms
+  s = addChain(s, 'lfo-1', { trigger: 'alternate', shape: 'sine' }); // chain-2: 2Hz
+  s = addChain(s, 'chain-2', { trigger: 'sync', shape: 'square' }); // chain-3: SYNC ärver 2Hz från chain-2
   const chain3 = s.chains[1]!;
-  // chain-3 har period 250ms = 250_000µs. Kvart period = 62.5ms = 62_500µs
-  expect(computeChainSignal(chain3, 62_500, s.lfos, s.chains)).toBeCloseTo(1, 6);
+  // chain-3 SYNC har period från chain-2:s effective rate (2Hz) = 500ms
+  // Vid t=125ms: tInPeriod = 125000. phase = 125000/500000 × 2π = π/2. square=+1
+  expect(computeChainSignal(chain3, 125_000, s.lfos, s.chains)).toBe(1);
 });
 
 test('computeChainSignal: dangling source → 0', () => {
   const dangling: LfoChain = {
     id: 'chain-99',
     sourceId: 'lfo-nonexistent',
-    trigger: 'full',
+    trigger: 'sync',
     shape: 'sine',
     amount: 1,
     mode: 'bipolar',
@@ -164,9 +238,8 @@ test('computeChainSignal: dangling source → 0', () => {
 
 test('computeChainSignal: source rate=0 → 0 (no oscillation)', () => {
   let s = addLfo(emptyState());
-  // Explicitly mutera till rate=0 (skip validate-clamp för testing)
   s = { ...s, lfos: s.lfos.map((l) => ({ ...l, rate: 0 })) };
-  s = addChain(s, 'lfo-1', { trigger: 'full', shape: 'sine' });
+  s = addChain(s, 'lfo-1', { trigger: 'sync', shape: 'sine' });
   const chain = s.chains[0]!;
   expect(computeChainSignal(chain, 250_000, s.lfos, s.chains)).toBe(0);
 });
@@ -176,13 +249,12 @@ test('computeChainSignal: source rate=0 → 0 (no oscillation)', () => {
 test('computeModulatorSignal: dispatchar LFO till computeLfoSignal', () => {
   const s = addLfo(emptyState());
   const lfo = s.lfos[0]!;
-  // sine 1Hz @ t=250ms → +1
   expect(computeModulatorSignal(lfo, 250_000, s.lfos, s.chains)).toBeCloseTo(1, 6);
 });
 
 test('computeModulatorSignal: dispatchar chain till computeChainSignal', () => {
   let s = addLfo(emptyState());
-  s = addChain(s, 'lfo-1', { trigger: 'full', shape: 'sine' });
+  s = addChain(s, 'lfo-1', { trigger: 'sync', shape: 'sine' });
   const chain = s.chains[0]!;
   expect(computeModulatorSignal(chain, 250_000, s.lfos, s.chains)).toBeCloseTo(1, 6);
 });
@@ -302,7 +374,7 @@ test('validateInvariants: dangling chain.sourceId flaggas', () => {
     chains: [{
       id: 'chain-1',
       sourceId: 'lfo-ghost',
-      trigger: 'full' as const,
+      trigger: 'sync' as const,
       shape: 'sine' as const,
       amount: 1,
       mode: 'bipolar' as const,

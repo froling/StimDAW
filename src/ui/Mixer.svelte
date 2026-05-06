@@ -167,7 +167,8 @@
   function onAddChain(): void {
     const firstLfo = synth.current.lfos[0];
     if (!firstLfo) return;
-    addChain(firstLfo.id, { trigger: 'full', shape: 'sine' });
+    // trigger default i addChain = 'alternate'
+    addChain(firstLfo.id, { shape: 'sine' });
   }
 
   let isRunning = $derived(app.isMixerRunning);

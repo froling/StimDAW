@@ -109,7 +109,11 @@ export function lookupModulator(
 /**
  * Beräkna effective rate (Hz) för en modulator, rekursivt.
  * För LFO: returnerar lfo.rate.
- * För LfoChain: source.effectiveRate × (trigger === 'half' ? 2 : 1).
+ * För LfoChain:
+ *   - 'sync': samma rate som source
+ *   - 'offset': samma rate som source (bara fas-skift, inte rate-multiplier)
+ *   - 'alternate': 2× source rate (chain hinner spela en hel cykel under
+ *     source-negativa halvan = halva source-perioden)
  *
  * Cycle-skydd via visited-set så infinite recursion förhindras vid bug
  * i state-validering. Om dangling source eller cycle: returnerar 0.
@@ -130,17 +134,28 @@ export function effectiveRate(
   const source = lookupModulator(modulator.sourceId, lfos, chains);
   if (!source) return 0; // dangling
   const srcRate = effectiveRate(source, lfos, chains, visited);
-  return srcRate * (modulator.trigger === 'half' ? 2 : 1);
+  return srcRate * (modulator.trigger === 'alternate' ? 2 : 1);
 }
 
 /**
  * Beräkna LfoChain output (-1..+1 × amount) vid simNow.
  *
- * Trigger-tempo:
- *   trigger_interval = 1 / source_effective_rate × (trigger==='half' ? 0.5 : 1)
+ * Tre trigger-modes:
  *
- * Phase resets vid varje trigger:
- *   phase_radians = ((t mod trigger_interval) / trigger_interval) × 2π
+ * - 'sync': chain phase = source-fas (samma rate, samma fas). Layered
+ *   modulation — chain spelar med en annan shape men samma takt som source.
+ *   phase = (t mod period) / period × 2π
+ *
+ * - 'offset': chain phase = source-fas + π (180° skift, samma rate).
+ *   För symmetriska shapes ger matematisk invers. Båda spelar samtidigt,
+ *   ingen gate.
+ *   phase = ((t mod period) / period × 2π + π) mod 2π
+ *
+ * - 'alternate': chain GATED till source-negativa halvan. När source-signal
+ *   ≥ 0 returneras 0 (silent). När < 0 spelar chain sin egen waveform med
+ *   2× rate så en hel chain-cykel ryms inom source-negativa halvan.
+ *   phase = (t mod (period/2)) / (period/2) × 2π
+ *   Ger äkta tid-delning ("ena vågen klar, nästa startar").
  *
  * Sedan: waveform(phase) → applyLfoMode → × amount.
  *
@@ -160,16 +175,39 @@ export function computeChainSignal(
   const srcRate = effectiveRate(source, lfos, chains);
   if (srcRate <= 0 || !Number.isFinite(srcRate)) return 0;
 
-  // Source period (µs) → trigger interval
   const sourcePeriodMicros = 1_000_000 / srcRate;
-  const triggerIntervalMicros =
-    chain.trigger === 'half' ? sourcePeriodMicros / 2 : sourcePeriodMicros;
-  if (triggerIntervalMicros <= 0) return 0;
+  if (sourcePeriodMicros <= 0) return 0;
 
-  // Wrap t till positivt intervall (handles negativa tMicros defensivt)
-  const tInInterval =
-    ((tMicros % triggerIntervalMicros) + triggerIntervalMicros) % triggerIntervalMicros;
-  const phaseRadians = (tInInterval / triggerIntervalMicros) * TWO_PI;
+  let phaseRadians: number;
+
+  switch (chain.trigger) {
+    case 'sync': {
+      const tInPeriod =
+        ((tMicros % sourcePeriodMicros) + sourcePeriodMicros) % sourcePeriodMicros;
+      phaseRadians = (tInPeriod / sourcePeriodMicros) * TWO_PI;
+      break;
+    }
+    case 'offset': {
+      const tInPeriod =
+        ((tMicros % sourcePeriodMicros) + sourcePeriodMicros) % sourcePeriodMicros;
+      // Phase = source phase + π, wrap inom [0, 2π)
+      phaseRadians = ((tInPeriod / sourcePeriodMicros) * TWO_PI + Math.PI) % TWO_PI;
+      break;
+    }
+    case 'alternate': {
+      // Gate: chain spelar bara när source-signal < 0.
+      // computeModulatorSignal hanterar source recursively (LFO eller chain).
+      const sourceSignal = computeModulatorSignal(source, tMicros, lfos, chains);
+      if (sourceSignal >= 0) return 0;
+      // Phase: 2× rate, resets vid varje halv-period-boundary av source
+      const halfPeriod = sourcePeriodMicros / 2;
+      const tInHalf = ((tMicros % halfPeriod) + halfPeriod) % halfPeriod;
+      phaseRadians = (tInHalf / halfPeriod) * TWO_PI;
+      break;
+    }
+    default:
+      return 0;
+  }
 
   const wave = getWaveform(chain.shape);
   const shaped = applyLfoMode(wave(phaseRadians), chain.mode);

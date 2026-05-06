@@ -50,14 +50,19 @@
   type TriggerOption = { value: ChainTrigger; label: string; tooltip: string };
   const TRIGGERS: TriggerOption[] = [
     {
-      value: 'full',
-      label: 'FULL',
-      tooltip: 'Trigga vid varje hel-cykel av source — chain effective rate = source rate',
+      value: 'sync',
+      label: 'SYNC',
+      tooltip: 'Sync — chain spelar i fas med source, samma rate. Layered modulation: byt shape men ärv takten.',
     },
     {
-      value: 'half',
-      label: 'HALF',
-      tooltip: 'Trigga vid varje halv-cykel av source — chain effective rate = source rate × 2',
+      value: 'offset',
+      label: 'OFFSET',
+      tooltip: 'Offset — chain spelar samma rate men 180° fas-skift. För symmetriska shapes (sine/triangle/square) ger detta matematisk invers. Båda spelar samtidigt.',
+    },
+    {
+      value: 'alternate',
+      label: 'ALT',
+      tooltip: 'Alternate — chain spelar BARA när source-signal < 0 (gated). Ger äkta tid-delning: när source-vågen är "klar" tar chain över. 2× source rate under gate-on.',
     },
   ];
 

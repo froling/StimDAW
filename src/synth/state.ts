@@ -327,7 +327,10 @@ export function addChain(
   const chain: LfoChain = {
     id: newId,
     sourceId,
-    trigger: options.trigger ?? 'full',
+    // Default 'alternate' — primary use-case är tid-delad alternation
+    // ("ena vågen klar, nästa startar"). User kan välja sync för layered
+    // modulation eller offset för matematisk invers.
+    trigger: options.trigger ?? 'alternate',
     shape: options.shape ?? 'sine',
     amount: options.amount ?? 1,
     mode: options.mode ?? 'bipolar',

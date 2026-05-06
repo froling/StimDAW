@@ -103,11 +103,22 @@ export interface ChannelRuntime {
 }
 
 /**
- * Trigger-mode för LfoChain — när chain:s waveform-cykel ska börja om
- * relativt sin source. 'full' = vid varje hel-cykel av source. 'half' =
- * vid varje halv-cykel (dubblar effective rate).
+ * Trigger-mode för LfoChain — bestämmer hur chain förhåller sig till sin
+ * source temporalt:
+ *
+ * - 'sync': chain spelar i fas med source, samma rate. Använd för layered
+ *   modulation — kombinera source-rate med en annan vågform-shape på chain.
+ * - 'offset': chain spelar samma rate men med 180° fas-skift. För symmetriska
+ *   shapes (sine/triangle/square) ger detta matematisk invers av source.
+ *   För saw ger det en time-shifted saw (fortfarande shape-bevarad).
+ *   Båda källor spelar SAMTIDIGT, ingen tid-delning.
+ * - 'alternate': chain GATED till source-negativa halvan — chain spelar
+ *   bara när source.signal < 0, är tyst när source.signal ≥ 0. Ger äkta
+ *   tid-delning ("alternerande känsla, ena vågen är klar → nästa startar").
+ *   Chain effective rate = 2× source så chain hinner spela en hel cykel
+ *   under source-negativa halvan. Funkar uniformt för alla shapes.
  */
-export type ChainTrigger = 'full' | 'half';
+export type ChainTrigger = 'sync' | 'offset' | 'alternate';
 
 /**
  * LfoChain — slav-modulator vars rate styrs av en source-modulator
