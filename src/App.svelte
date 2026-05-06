@@ -5,8 +5,7 @@
   import { synth } from './ui/synth/synth-store.svelte';
   import ConnectionBanner from './ui/ConnectionBanner.svelte';
   import StopButton from './ui/StopButton.svelte';
-  import Monitor from './ui/Monitor.svelte';
-  import IntensitySlider from './ui/IntensitySlider.svelte';
+  import MonitorBar from './ui/MonitorBar.svelte';
   import Cli from './ui/Cli.svelte';
   import PatternRunnerBar from './ui/PatternRunnerBar.svelte';
   import Oscilloscope from './ui/Oscilloscope.svelte';
@@ -17,14 +16,12 @@
   const log = createLogger('app');
 
   /**
-   * F1 source-mode tabs (audit-rec): Patterns OR Mixer i samma slot.
-   * Mutex är visuell (replace), inte gray-out av disabled-state.
+   * Source-mode tabs: Patterns OR Mixer i samma slot. Mutex är visuell.
    */
-  let activeMode = $state<'patterns' | 'mixer'>('patterns');
+  let activeMode = $state<'patterns' | 'mixer'>('mixer');
 
   function pickMode(mode: 'patterns' | 'mixer'): void {
     if (mode === activeMode) return;
-    // Stoppa aktiv source vid mode-byte (1.3A safety: ingen overlap)
     if (activeMode === 'patterns') {
       stopPattern();
     } else if (activeMode === 'mixer') {
@@ -44,9 +41,13 @@
     <h1>StimDAW <span class="version">β</span></h1>
     <span class="subtitle">mock-driven · NeoDK-only</span>
   </div>
-  <!-- F7: source-active indicator -->
+
+  <!-- Compact telemetri-bar inline i topbar — ersätter gamla 3-radiga
+       Monitor-panelen. Tone-coded numerics (gult/rött vid threshold). -->
+  <MonitorBar />
+
   <span class="source-indicator">
-    Source: <span class="source-name">{activeMode === 'mixer' ? 'Mixer' : 'Patterns'}</span>
+    <span class="source-name">{activeMode === 'mixer' ? 'Mixer' : 'Patterns'}</span>
     {#if synth.activeSource === 'mixer' || (activeMode === 'patterns')}
       <span class="source-dot"></span>
     {/if}
@@ -57,48 +58,36 @@
 <main>
   <ConnectionBanner />
 
-  <div class="grid">
-    <Monitor />
-    <IntensitySlider />
-
-    <!-- F1: source-mode tabs (segmented control), Mutex visuell — ej disabled-state -->
-    <div class="col-span-2 source-tabs" role="tablist" aria-label="Signal source" data-testid="source-tabs">
-      <button
-        role="tab"
-        aria-selected={activeMode === 'patterns'}
-        class="source-tab"
-        class:active={activeMode === 'patterns'}
-        onclick={() => pickMode('patterns')}
-        data-testid="source-tab-patterns"
-      >Patterns</button>
-      <button
-        role="tab"
-        aria-selected={activeMode === 'mixer'}
-        class="source-tab"
-        class:active={activeMode === 'mixer'}
-        onclick={() => pickMode('mixer')}
-        data-testid="source-tab-mixer"
-      >Mixer</button>
-    </div>
-
-    <div class="col-span-2">
-      {#if activeMode === 'patterns'}
-        <PatternRunnerBar />
-      {:else}
-        <Mixer />
-      {/if}
-    </div>
-
-    <div class="col-span-2">
-      <PolarFlow />
-    </div>
-    <div class="col-span-2">
-      <Oscilloscope />
-    </div>
-    <div class="col-span-2">
-      <Cli />
-    </div>
+  <div class="source-tabs" role="tablist" aria-label="Signal source" data-testid="source-tabs">
+    <button
+      role="tab"
+      aria-selected={activeMode === 'patterns'}
+      class="source-tab"
+      class:active={activeMode === 'patterns'}
+      onclick={() => pickMode('patterns')}
+      data-testid="source-tab-patterns"
+    >Patterns</button>
+    <button
+      role="tab"
+      aria-selected={activeMode === 'mixer'}
+      class="source-tab"
+      class:active={activeMode === 'mixer'}
+      onclick={() => pickMode('mixer')}
+      data-testid="source-tab-mixer"
+    >Mixer</button>
   </div>
+
+  <div class="source-panel">
+    {#if activeMode === 'patterns'}
+      <PatternRunnerBar />
+    {:else}
+      <Mixer />
+    {/if}
+  </div>
+
+  <PolarFlow />
+  <Oscilloscope />
+  <Cli />
 </main>
 
 <style>
@@ -107,21 +96,42 @@
   }
   .topbar {
     display: flex;
-    justify-content: space-between;
     align-items: center;
-    gap: 1rem;
-    padding: 1rem 1.5rem;
+    gap: 1.5rem;
+    padding: 0.7rem 1.5rem;
     background: white;
     border-bottom: 1px solid #e5e5e5;
     position: sticky;
     top: 0;
     z-index: 10;
+    flex-wrap: wrap;
+  }
+  .brand {
+    display: flex;
+    align-items: baseline;
+    gap: 0.75rem;
+    flex-shrink: 0;
+  }
+  h1 {
+    margin: 0;
+    font-size: 1.4rem;
+    font-family:
+      system-ui,
+      sans-serif;
+  }
+  .version {
+    color: #888;
+    font-weight: 400;
+    font-size: 0.7em;
+  }
+  .subtitle {
+    color: #888;
+    font-size: 0.78rem;
   }
   .source-indicator {
     margin-left: auto;
-    margin-right: 0.5rem;
     font-family: ui-monospace, monospace;
-    font-size: 0.75rem;
+    font-size: 0.72rem;
     color: #888;
     display: inline-flex;
     align-items: center;
@@ -170,27 +180,6 @@
     color: #0066cc;
     box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
   }
-  .brand {
-    display: flex;
-    align-items: baseline;
-    gap: 0.75rem;
-  }
-  h1 {
-    margin: 0;
-    font-size: 1.5rem;
-    font-family:
-      system-ui,
-      sans-serif;
-  }
-  .version {
-    color: #888;
-    font-weight: 400;
-    font-size: 0.7em;
-  }
-  .subtitle {
-    color: #888;
-    font-size: 0.85rem;
-  }
   main {
     max-width: 1100px;
     margin: 0 auto;
@@ -199,17 +188,16 @@
     flex-direction: column;
     gap: 1rem;
   }
-  .grid {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 1rem;
-  }
-  .col-span-2 {
-    grid-column: 1 / -1;
+  .source-panel {
+    /* Tar all bredd av main, hyser PatternRunnerBar eller Mixer */
   }
   @media (max-width: 720px) {
-    .grid {
-      grid-template-columns: 1fr;
+    .topbar {
+      padding: 0.6rem 1rem;
+      gap: 0.75rem;
+    }
+    .subtitle {
+      display: none;
     }
   }
 </style>

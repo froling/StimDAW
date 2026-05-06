@@ -1,13 +1,22 @@
 <script lang="ts">
+  /**
+   * Channel-strip i mixerbord-paradigm. Vertikal layout, från topp till botten:
+   *   Mute-knapp (grön=on, röd=mute)
+   *   Elcon-label (read-only — channels är fasta i Stage 2-mixer)
+   *   PW-knob (rotary, 40px)
+   *   PACE-knob (rotary, 40px)
+   *   AMP-fader (vertikal, 30×150 — DAW-konvention)
+   *
+   * Channels är fasta i Stage 2 — ingen ElconPicker, ingen remove-knapp.
+   * AMP=0 från seed → tystnad. Fader-up släpper ström.
+   */
   import Knob from './Knob.svelte';
-  import ElconPicker from './ElconPicker.svelte';
+  import VerticalFader from './VerticalFader.svelte';
   import {
     updateKnobBase,
     setChannelEnabled,
-    removeChannel,
-    setChannelElcon,
   } from './synth-store.svelte';
-  import { elconToLabel, type Elcon } from '../../patterns/types';
+  import { elconToLabel } from '../../patterns/types';
   import {
     PULSE_WIDTH_BOUNDS,
     PACE_BOUNDS,
@@ -17,7 +26,7 @@
 
   type Props = {
     channel: MixerChannel;
-    /** Cable-färg per knob baserat på modSource (LFO id → palette-färg). */
+    /** Cable-färg per knob baserat på modSource (modulator id → palette-färg). */
     modColors?: {
       pulseWidth?: string;
       pace?: string;
@@ -40,45 +49,29 @@
   function toggleEnabled(): void {
     setChannelEnabled(channel.id, !channel.enabled);
   }
-
-  function onRemove(): void {
-    if (confirm(`Remove channel ${elconToLabel(channel.elcon)}?`)) {
-      removeChannel(channel.id);
-    }
-  }
-
-  function onElconChange(next: Elcon): void {
-    setChannelElcon(channel.id, next);
-  }
 </script>
 
 <div
   class="channel-strip"
-  class:disabled={!channel.enabled}
+  class:muted={!channel.enabled}
   data-testid="channel-strip"
   data-channel-id={channel.id}
 >
-  <div class="channel-header">
-    <button
-      class="enable-toggle"
-      class:on={channel.enabled}
-      onclick={toggleEnabled}
-      title={channel.enabled ? 'Disable channel' : 'Enable channel'}
-      aria-label={channel.enabled ? 'Disable channel' : 'Enable channel'}
-    >
-      {channel.enabled ? '●' : '○'}
-    </button>
-    <ElconPicker value={channel.elcon} onChange={onElconChange} />
-    <button
-      class="remove-btn"
-      onclick={onRemove}
-      title="Remove channel"
-      aria-label={`Remove channel ${elconToLabel(channel.elcon)}`}
-    >×</button>
-  </div>
+  <button
+    class="mute-btn"
+    class:on={channel.enabled}
+    onclick={toggleEnabled}
+    title={channel.enabled ? 'Mute channel' : 'Unmute channel'}
+    aria-label={channel.enabled ? 'Mute channel' : 'Unmute channel'}
+    aria-pressed={!channel.enabled}
+    data-testid="channel-mute"
+  >M</button>
 
-  <div class="knobs">
-    <!-- data-knob-port markerar drop-targets för CableLayer drag-cable -->
+  <span class="elcon-label" title="Hardware electrode pair (fixed)">
+    {elconToLabel(channel.elcon)}
+  </span>
+
+  <div class="knob-row">
     <div
       class="knob-port"
       data-knob-port="true"
@@ -94,8 +87,12 @@
         modSourceId={channel.knobs.pulseWidth.modCableId}
         modColor={modColors.pulseWidth}
         onChange={setPulseWidth}
+        size={40}
       />
     </div>
+  </div>
+
+  <div class="knob-row">
     <div
       class="knob-port"
       data-knob-port="true"
@@ -112,25 +109,30 @@
         modSourceId={channel.knobs.pace.modCableId}
         modColor={modColors.pace}
         onChange={setPace}
+        size={40}
       />
     </div>
-    <div
-      class="knob-port"
-      data-knob-port="true"
-      data-channel-id={channel.id}
-      data-knob-name="amplitude"
-    >
-      <Knob
-        value={channel.knobs.amplitude.base}
-        bounds={AMPLITUDE_BOUNDS}
-        defaultValue={KNOB_DEFAULTS.amplitude}
-        unit="percent"
-        label="Amp"
-        modSourceId={channel.knobs.amplitude.modCableId}
-        modColor={modColors.amplitude}
-        onChange={setAmplitude}
-      />
-    </div>
+  </div>
+
+  <!-- AMP-fader är drop-target för cables, så data-knob-port här också. -->
+  <div
+    class="fader-port"
+    data-knob-port="true"
+    data-channel-id={channel.id}
+    data-knob-name="amplitude"
+  >
+    <VerticalFader
+      value={channel.knobs.amplitude.base}
+      bounds={AMPLITUDE_BOUNDS}
+      defaultValue={0}
+      unit="percent"
+      label="AMP"
+      modSourceId={channel.knobs.amplitude.modCableId}
+      modColor={modColors.amplitude}
+      onChange={setAmplitude}
+      height={140}
+      width={28}
+    />
   </div>
 </div>
 
@@ -138,93 +140,93 @@
   .channel-strip {
     display: flex;
     flex-direction: column;
+    align-items: center;
     background: white;
     border: 1px solid #e5e5e5;
     border-radius: 6px;
-    padding: 0.6rem;
-    gap: 0.5rem;
-    min-width: 180px;
+    padding: 0.4rem 0.3rem;
+    gap: 0.3rem;
+    min-width: 78px;
+    width: 78px;
     transition: opacity 0.15s, border-color 0.15s;
   }
-  .channel-strip.disabled {
-    opacity: 0.4;
+  .channel-strip.muted {
+    /* Muted = mer dim:ad än enabled så user ser status snabbt */
+    opacity: 0.55;
+    border-color: #f0d0d0;
   }
   .channel-strip:hover {
     border-color: #c0c0c0;
   }
 
-  .channel-header {
-    display: flex;
-    /* Top-align så enable-toggle + × sitter intill T+ raden, inte
-       floatar mellan T+ och T− raderna. */
-    align-items: flex-start;
-    gap: 0.4rem;
-    padding-bottom: 0.4rem;
-    border-bottom: 1px solid #f0f0f0;
-  }
-  .enable-toggle {
-    /* Match chip-höjd (22px) för cleaner alignment med T+ raden */
-    width: 22px;
-    height: 22px;
+  .mute-btn {
+    /* M-knapp: grön när enabled, röd när muted */
+    width: 26px;
+    height: 26px;
     border-radius: 50%;
-    border: 1px solid #ccc;
+    border: 1.5px solid;
     background: white;
-    color: #ccc;
+    font-family: ui-monospace, monospace;
     font-size: 0.7rem;
+    font-weight: 700;
     cursor: pointer;
     display: inline-flex;
     align-items: center;
     justify-content: center;
     padding: 0;
     flex-shrink: 0;
+    transition: all 0.1s;
   }
-  .enable-toggle.on {
-    border-color: #66bb66;
-    color: #66bb66;
+  .mute-btn.on {
+    border-color: #2a7;
+    color: #2a7;
+    background: #f0fff5;
   }
+  .mute-btn:not(.on) {
+    border-color: #cc0033;
+    color: #cc0033;
+    background: #fff0f3;
+  }
+  .mute-btn:hover {
+    transform: scale(1.05);
+  }
+
   .elcon-label {
-    flex: 1;
     font-family: ui-monospace, monospace;
-    font-size: 0.85rem;
+    font-size: 0.7rem;
     font-weight: 600;
     color: #333;
     letter-spacing: 0.02em;
-  }
-  .remove-btn {
-    /* Match chip-höjd så × hamnar level med T+ raden, inte midjan */
-    width: 22px;
-    height: 22px;
-    padding: 0;
-    border: none;
-    background: transparent;
-    flex-shrink: 0;
-    color: #aaa;
-    font-size: 1rem;
-    cursor: pointer;
     line-height: 1;
-  }
-  .remove-btn:hover {
-    color: #cc0033;
+    white-space: nowrap;
   }
 
-  .knobs {
+  .knob-row {
     display: flex;
-    justify-content: space-around;
-    padding: 0.3rem 0;
+    justify-content: center;
   }
+
   .knob-port {
-    /* CableLayer hookar drop-target via data-knob-port-attribute */
     position: relative;
     border-radius: 6px;
     padding: 2px;
     transition: outline 0.1s, background 0.1s;
   }
-  /* Class .drop-target sätts av CableLayer under drag-active för att highlita */
-  :global(.knob-port.drop-target-available) {
+  .fader-port {
+    position: relative;
+    padding: 2px;
+    border-radius: 4px;
+    transition: outline 0.1s, background 0.1s;
+  }
+
+  /* Drop-target highlights — sätts av CableLayer under drag */
+  :global(.knob-port.drop-target-available),
+  :global(.fader-port.drop-target-available) {
     outline: 2px dashed var(--drop-color, #888);
     outline-offset: 2px;
   }
-  :global(.knob-port.drop-target-occupied) {
+  :global(.knob-port.drop-target-occupied),
+  :global(.fader-port.drop-target-occupied) {
     outline: 2px solid var(--drop-color, #888);
     outline-offset: 2px;
     opacity: 0.6;

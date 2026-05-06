@@ -12,6 +12,7 @@
   import LFOModule from './synth/LFOModule.svelte';
   import LFOChainModule from './synth/LFOChainModule.svelte';
   import CableLayer from './synth/CableLayer.svelte';
+  import MasterStrip from './synth/MasterStrip.svelte';
   import { lfoColor } from './synth/cable-helpers';
   import { ElectrodeMask, type Elcon } from '../patterns/types';
   import type { MixerChannel as ChannelT } from '../synth/types';
@@ -146,34 +147,6 @@
     return out;
   }
 
-  function onAddChannel(): void {
-    // Cykla genom de 9 hardware-VALID elcon-konfigurationerna.
-    // En sida från {A,C}, andra från {B,D}. Inga A↔C eller B↔D
-    // (de electroderna är buddies på samma transformator-sida i switch
-    // matrix — fysiskt omöjligt). Komplett picker kommer i β.1.
-    const used = new Set(
-      synth.current.channels.map((c) => `${c.elcon[0]}-${c.elcon[1]}`),
-    );
-    const candidates: Elcon[] = [
-      [ElectrodeMask.A, ElectrodeMask.B],
-      [ElectrodeMask.A, ElectrodeMask.D],
-      [ElectrodeMask.C, ElectrodeMask.B],
-      [ElectrodeMask.C, ElectrodeMask.D],
-      [ElectrodeMask.A, ElectrodeMask.BD],
-      [ElectrodeMask.C, ElectrodeMask.BD],
-      [ElectrodeMask.AC, ElectrodeMask.B],
-      [ElectrodeMask.AC, ElectrodeMask.D],
-      [ElectrodeMask.AC, ElectrodeMask.BD],
-    ];
-    const next = candidates.find((e) => !used.has(`${e[0]}-${e[1]}`));
-    if (next) {
-      addChannel(next);
-    } else {
-      // Alla 9 unique konfigs upptagna — duplikera default (tillåtet för β.0)
-      addChannel([ElectrodeMask.A, ElectrodeMask.B]);
-    }
-  }
-
   function onAddLfo(): void {
     // Cycle shapes så successive LFOs blir distinkta
     const shapes = ['sine', 'saw', 'square', 'triangle'] as const;
@@ -248,15 +221,13 @@
   <div class="section channels-section">
     <div class="section-header">
       <span class="section-label">Channels</span>
+      <span class="section-hint">9 fasta hardware-valid elcons · AMP fader-up släpper ström</span>
     </div>
-    <div class="section-content">
+    <div class="section-content channels-row">
       {#each synth.current.channels as ch (ch.id)}
         <MixerChannel channel={ch} modColors={getModColors(ch)} />
       {/each}
-      <button class="add-card" type="button" onclick={onAddChannel} data-testid="mixer-add-channel">
-        <span class="plus">+</span>
-        <span class="add-label">Channel</span>
-      </button>
+      <MasterStrip />
     </div>
   </div>
 
@@ -429,6 +400,26 @@
     flex-wrap: wrap;
     gap: 0.6rem;
     align-items: flex-start;
+  }
+  .section-content.channels-row {
+    /* Mixerbord-konvention: alla strips på en rad, master sist till höger.
+       Wrap:ar bara på mobile (<720px) så desktop ser klassiskt mixerbord ut. */
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    padding-bottom: 0.3rem;
+    align-items: stretch;
+  }
+  .section-hint {
+    margin-left: 0.5rem;
+    font-family: ui-monospace, monospace;
+    font-size: 0.62rem;
+    color: #aaa;
+    letter-spacing: 0.02em;
+  }
+  @media (max-width: 720px) {
+    .section-content.channels-row {
+      flex-wrap: wrap;
+    }
   }
 
   .add-card {
