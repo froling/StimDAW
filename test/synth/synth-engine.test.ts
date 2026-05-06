@@ -11,6 +11,7 @@ import {
   setChannelEnabled,
   _resetIdsForTesting,
 } from '../../src/synth/state';
+import { seedDcAmp } from './_test-helpers';
 import type { MixerState, KnobState } from '../../src/synth/types';
 import type { PtDescriptor } from '../../src/protocol/descriptor';
 import { ElectrodeMask } from '../../src/patterns/types';
@@ -128,6 +129,25 @@ test('evaluateKnob: dangling cable-ref → graceful fallback till base', () => {
 
 // ── evaluateKnob AMP-mode (post-fader VCA, headroom-clamp) ──────────
 
+test('evaluateKnob AMP: utan LFO-cable → 0 (mute, oavsett fader)', () => {
+  // Mixer-mental: fadern är gain, LFO är signal-källan. Utan signal → tyst.
+  // Detta var BUG-fallet: tidigare returnerade evaluateKnob fadern direkt.
+  const knob: KnobState = { base: 200, modCableId: null };
+  expect(evaluateKnob(knob, { min: 0, max: 255 }, 0, emptyState(), 'amp')).toBe(0);
+});
+
+test('evaluateKnob PW utan cable → fader-värde (Reason-style additive)', () => {
+  // PW är inte VCA: utan cable returnerar knob.base (DC).
+  const knob: KnobState = { base: 144, modCableId: null };
+  expect(evaluateKnob(knob, { min: 2, max: 200 }, 0, emptyState(), 'pw')).toBe(144);
+});
+
+test('evaluateKnob AMP: dangling cable-ref → 0 (samma som no-cable)', () => {
+  const state = emptyState();
+  const knob: KnobState = { base: 200, modCableId: 'nonexistent' };
+  expect(evaluateKnob(knob, { min: 0, max: 255 }, 0, state, 'amp')).toBe(0);
+});
+
 test('evaluateKnob AMP: fader=0 → mute, oavsett LFO peak', () => {
   // Det var BUG-fallet: gamla additive-modellen lät LFO peak väcka
   // muted kanal från base=0 till max. Nya modellen: cap=0 → 0.
@@ -152,6 +172,23 @@ test('evaluateKnob AMP: fader=full + volume=0.5 + sine peak → cap', () => {
   expect(evaluateKnob(knob, { min: 0, max: 255 }, 250_000, state, 'amp')).toBeCloseTo(255, 6);
   // Sine valley: -127.5 → 0
   expect(evaluateKnob(knob, { min: 0, max: 255 }, 750_000, state, 'amp')).toBeCloseTo(0, 6);
+});
+
+test('evaluateKnob AMP: master+amp+volume=full → sine når 0 till cap', () => {
+  // Användarens test-case: master=100% (Hz), AMP=100% (cap=255), volume=50%
+  // → sine ska svinga från 0 (botten) till 255 (toppen). Default depth=1.0
+  // efter senaste ändringen.
+  let state = emptyState();
+  state = addLfo(state); // amount=1, volume=0.5, rate=1× default
+  state = addChannel(state, [ElectrodeMask.A, ElectrodeMask.B]);
+  state = addCable(state, state.lfos[0]!.id, state.channels[0]!.id, 'amplitude');
+  // ↑ default depth=1.0 nu
+  const cableId = state.cables[0]!.id;
+  const knob: KnobState = { base: 255, modCableId: cableId };
+  // Sine peak vid t=250ms → 255
+  expect(evaluateKnob(knob, { min: 0, max: 255 }, 250_000, state, 'amp')).toBeCloseTo(255, 5);
+  // Sine valley vid t=750ms → 0
+  expect(evaluateKnob(knob, { min: 0, max: 255 }, 750_000, state, 'amp')).toBeCloseTo(0, 5);
 });
 
 test('evaluateKnob AMP: vågformen ryms ALLTID inom [0, cap] (ingen clipping)', () => {
@@ -254,6 +291,7 @@ test('engine: idle innan start, ingen emit', () => {
 test('engine: start schemalägger initial emit', () => {
   let s = emptyState();
   s = addChannel(s, [ElectrodeMask.A, ElectrodeMask.B]);
+  s = seedDcAmp(s, s.channels[0]!.id);
   const rig = makeRig(s);
   rig.engine.start();
   expect(rig.engine.isRunning()).toBe(true);
@@ -266,6 +304,7 @@ test('engine: start schemalägger initial emit', () => {
 test('engine: emit fortsätter på pace-intervaller', () => {
   let s = emptyState();
   s = addChannel(s, [ElectrodeMask.A, ElectrodeMask.B]); // pace default 25_000µs
+  s = seedDcAmp(s, s.channels[0]!.id);
   const rig = makeRig(s);
   rig.engine.start();
 
@@ -304,27 +343,20 @@ test('engine: lyft amp från 0 mid-run → emits resumerar', () => {
   let s = emptyState();
   s = addChannel(s, [ElectrodeMask.A, ElectrodeMask.B]);
   const chId = s.channels[0]!.id;
-  // Start med amp=0
-  s = {
-    ...s,
-    channels: s.channels.map((ch) =>
-      ch.id !== chId
-        ? ch
-        : { ...ch, knobs: { ...ch.knobs, amplitude: { base: 0, modCableId: null } } },
-    ),
-  };
+  // Static DC-AMP men cap=0 → tyst initialt
+  s = seedDcAmp(s, chId, 0);
   const rig = makeRig(s);
   rig.engine.start();
-  rig.clock.advance(50_000); // tystnad
+  rig.clock.advance(50_000); // tystnad (cap=0)
   expect(rig.emitted.length).toBe(0);
 
-  // Lyft amp till 128 — engine läser senaste state vid varje emit-evaluering
+  // Lyft cap till 128 — engine läser senaste state vid varje emit-evaluering
   rig.setState({
     ...rig.state,
     channels: rig.state.channels.map((ch) =>
       ch.id !== chId
         ? ch
-        : { ...ch, knobs: { ...ch.knobs, amplitude: { base: 128, modCableId: null } } },
+        : { ...ch, knobs: { ...ch.knobs, amplitude: { ...ch.knobs.amplitude, base: 128 } } },
     ),
   });
   rig.clock.advance(50_000); // 2 paces vid 25ms — bör ge ~2 emits
@@ -338,24 +370,18 @@ test('engine: phase-flip körs INTE för skipped pulses (DC-stim safety)', () =>
   let s = emptyState();
   s = addChannel(s, [ElectrodeMask.A, ElectrodeMask.B]);
   const chId = s.channels[0]!.id;
-  s = {
-    ...s,
-    channels: s.channels.map((ch) =>
-      ch.id !== chId
-        ? ch
-        : { ...ch, knobs: { ...ch.knobs, amplitude: { base: 0, modCableId: null } } },
-    ),
-  };
+  // Static DC-AMP men cap=0 → mute initialt
+  s = seedDcAmp(s, chId, 0);
   const rig = makeRig(s);
   rig.engine.start();
   rig.clock.advance(50_000); // 2-3 skipped pulses
-  // Lyft amp
+  // Lyft cap till 128 → emits börjar
   rig.setState({
     ...rig.state,
     channels: rig.state.channels.map((ch) =>
       ch.id !== chId
         ? ch
-        : { ...ch, knobs: { ...ch.knobs, amplitude: { base: 128, modCableId: null } } },
+        : { ...ch, knobs: { ...ch.knobs, amplitude: { ...ch.knobs.amplitude, base: 128 } } },
     ),
   });
   rig.clock.advance(50_000);
@@ -367,6 +393,7 @@ test('engine: phase-flip körs INTE för skipped pulses (DC-stim safety)', () =>
 test('engine: phase alternates 0,1,0,1 per emit (GAP-A, CRITICAL safety)', () => {
   let s = emptyState();
   s = addChannel(s, [ElectrodeMask.A, ElectrodeMask.B]);
+  s = seedDcAmp(s, s.channels[0]!.id);
   const rig = makeRig(s);
   rig.engine.start();
 
@@ -378,6 +405,7 @@ test('engine: phase alternates 0,1,0,1 per emit (GAP-A, CRITICAL safety)', () =>
 test('engine: sequenceNumber inkrementerar och wrappar at 256', () => {
   let s = emptyState();
   s = addChannel(s, [ElectrodeMask.A, ElectrodeMask.B]);
+  s = seedDcAmp(s, s.channels[0]!.id);
   const rig = makeRig(s);
   rig.engine.start();
 
@@ -393,6 +421,7 @@ test('engine: sequenceNumber inkrementerar och wrappar at 256', () => {
 test('engine: bounds clamping integration — pulse_width clampat 2..200µs', () => {
   let s = emptyState();
   s = addChannel(s, [ElectrodeMask.A, ElectrodeMask.B]);
+  s = seedDcAmp(s, s.channels[0]!.id);
   const rig = makeRig(s);
   rig.engine.start();
   rig.clock.advance(0);
@@ -414,6 +443,7 @@ test('engine: pace clamps to floor (5ms) — pace knob under hardware-min', () =
       ch.id !== chId ? ch : { ...ch, knobs: { ...ch.knobs, pace: { base: 1000, modCableId: null } } },
     ),
   };
+  s = seedDcAmp(s, chId);
   const rig = makeRig(s);
   rig.engine.start();
   rig.clock.advance(0);
@@ -427,6 +457,7 @@ test('engine: pace clamps to floor (5ms) — pace knob under hardware-min', () =
 test('engine: stop() bumpar generation, pending events no-op (GAP-F)', () => {
   let s = emptyState();
   s = addChannel(s, [ElectrodeMask.A, ElectrodeMask.B]);
+  s = seedDcAmp(s, s.channels[0]!.id);
   const rig = makeRig(s);
   rig.engine.start();
   rig.clock.advance(50_000); // 3 emits (0, 25k, 50k)
@@ -440,6 +471,7 @@ test('engine: stop() bumpar generation, pending events no-op (GAP-F)', () => {
 test('engine: restart efter stop ger nya gen, ingen cross-läkage', () => {
   let s = emptyState();
   s = addChannel(s, [ElectrodeMask.A, ElectrodeMask.B]);
+  s = seedDcAmp(s, s.channels[0]!.id);
   const rig = makeRig(s);
   rig.engine.start();
   rig.clock.advance(25_000); // 2 emits
@@ -457,6 +489,8 @@ test('engine: removeChannel mid-run stoppar emits från den channeln', () => {
   let s = emptyState();
   s = addChannel(s, [ElectrodeMask.A, ElectrodeMask.B]);
   s = addChannel(s, [ElectrodeMask.AC, ElectrodeMask.BD]);
+  s = seedDcAmp(s, s.channels[0]!.id);
+  s = seedDcAmp(s, s.channels[1]!.id);
   const rig = makeRig(s);
   rig.engine.start();
   rig.clock.advance(50_000); // 3 emits per channel = 6 total
@@ -485,6 +519,8 @@ test('engine: två channels med olika pace interleavar korrekt', () => {
       ch.id !== ch1Id ? ch : { ...ch, knobs: { ...ch.knobs, pace: { base: 10_000, modCableId: null } } },
     ),
   };
+  s = seedDcAmp(s, ch1Id);
+  s = seedDcAmp(s, s.channels[1]!.id);
   const rig = makeRig(s);
   rig.engine.start();
   rig.clock.advance(100_000); // 100ms
@@ -514,6 +550,7 @@ test('engine: LFO modulerar pulse_width over LFO-period', () => {
   };
   // Cable LFO → pulseWidth med depth=1.0
   s = addCable(s, s.lfos[0]!.id, chId, 'pulseWidth', 1.0);
+  s = seedDcAmp(s, chId);
 
   const rig = makeRig(s);
   rig.engine.start();
@@ -532,6 +569,7 @@ test('engine: LFO amount=0 → ingen modulation, base-värdet enbart', () => {
   s = setLfoAmount(s, s.lfos[0]!.id, 0);
   s = addChannel(s, [ElectrodeMask.A, ElectrodeMask.B]);
   s = addCable(s, s.lfos[0]!.id, s.channels[0]!.id, 'pulseWidth', 1.0);
+  s = seedDcAmp(s, s.channels[0]!.id);
   const rig = makeRig(s);
   rig.engine.start();
   rig.clock.advance(100_000);
@@ -547,6 +585,7 @@ test('engine: rate-change tar effekt vid nästa emit', () => {
   s = addLfo(s);
   s = addChannel(s, [ElectrodeMask.A, ElectrodeMask.B]);
   s = addCable(s, s.lfos[0]!.id, s.channels[0]!.id, 'pulseWidth', 1.0);
+  s = seedDcAmp(s, s.channels[0]!.id);
   const rig = makeRig(s);
   rig.engine.start();
   rig.clock.advance(50_000); // 3 emits at 1Hz LFO
@@ -566,6 +605,7 @@ test('engine: rate-change tar effekt vid nästa emit', () => {
 test('engine: start är idempotent, dubbel-start har ingen effekt', () => {
   let s = emptyState();
   s = addChannel(s, [ElectrodeMask.A, ElectrodeMask.B]);
+  s = seedDcAmp(s, s.channels[0]!.id);
   const rig = makeRig(s);
   rig.engine.start();
   rig.engine.start(); // no-op

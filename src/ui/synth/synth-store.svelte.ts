@@ -159,7 +159,7 @@ export function addCable(
   sourceLfoId: string,
   destChannelId: string,
   destKnobName: 'pulseWidth' | 'pace' | 'amplitude',
-  depth = 0.5,
+  depth = 1.0,
 ): void {
   synth.current = state.addCable(
     synth.current,

@@ -28,6 +28,7 @@ import {
   _resetIdsForTesting,
 } from '../../src/synth/state';
 import { computeLfoSignal } from '../../src/synth/lfo';
+import { seedDcAmp } from '../synth/_test-helpers';
 import type { MixerState } from '../../src/synth/types';
 import type { PtDescriptor } from '../../src/protocol/descriptor';
 import { ElectrodeMask } from '../../src/patterns/types';
@@ -68,6 +69,7 @@ test('GAP-B CRITICAL: stopMixer drainar pending events, ingen late dispatch (saf
   // Build state: 1 channel, default pace 25ms
   let s = emptyState();
   s = addChannel(s, [ElectrodeMask.A, ElectrodeMask.B]);
+  s = seedDcAmp(s, s.channels[0]!.id);
   const rig = new MixerRig(s);
 
   // Start engine, kör 100ms (5 emits at 25ms pace incl initial vid 0)
@@ -88,6 +90,7 @@ test('GAP-B CRITICAL: stopMixer drainar pending events, ingen late dispatch (saf
 test('GAP-B follow-up: restart efter stop ger ny generation, ingen cross-leak', () => {
   let s = emptyState();
   s = addChannel(s, [ElectrodeMask.A, ElectrodeMask.B]);
+  s = seedDcAmp(s, s.channels[0]!.id);
   const rig = new MixerRig(s);
 
   rig.engine.start();
@@ -129,6 +132,8 @@ test('Multi-channel: olika pace ger interleaved emit-pattern', () => {
         : { ...ch, knobs: { ...ch.knobs, pace: { base: 50_000, modCableId: null } } },
     ),
   };
+  s = seedDcAmp(s, ch1Id);
+  s = seedDcAmp(s, ch2Id);
 
   const rig = new MixerRig(s);
   rig.engine.start();
@@ -164,6 +169,7 @@ test('LFO modulerar pulse_width över hela period', () => {
     ),
   };
   s = addCable(s, s.lfos[0]!.id, chId, 'pulseWidth', 1.0);
+  s = seedDcAmp(s, chId);
 
   const rig = new MixerRig(s);
   rig.engine.start();
@@ -183,6 +189,7 @@ test('Cable removal: knob reverts till base-värde', () => {
   s = addLfo(s);
   s = addChannel(s, [ElectrodeMask.A, ElectrodeMask.B]);
   s = addCable(s, s.lfos[0]!.id, s.channels[0]!.id, 'pulseWidth', 1.0);
+  s = seedDcAmp(s, s.channels[0]!.id);
   const cableId = s.cables[0]!.id;
   const rig = new MixerRig(s);
 
@@ -221,6 +228,7 @@ test('Multi-LFO: rate-change på LFO A påverkar inte cable LFO B → channel C'
   };
   // Cable från LFO B (ej A) till channelns pulseWidth
   s = addCable(s, s.lfos[1]!.id, chId, 'pulseWidth', 1.0);
+  s = seedDcAmp(s, chId);
 
   const rig = new MixerRig(s);
   rig.engine.start();
@@ -248,6 +256,8 @@ test('GAP-A regression: per-channel phase-flip kvarstår vid multi-channel', () 
   let s = emptyState();
   s = addChannel(s, [ElectrodeMask.A, ElectrodeMask.B]);
   s = addChannel(s, [ElectrodeMask.C, ElectrodeMask.D]); // valid: C∈{A,C}, D∈{B,D}
+  s = seedDcAmp(s, s.channels[0]!.id);
+  s = seedDcAmp(s, s.channels[1]!.id);
   const rig = new MixerRig(s);
   rig.engine.start();
   rig.clock.advance(100_000); // 4 emits per channel
@@ -316,6 +326,7 @@ test('setChannelEnabled OFF→ON under run: ensureChannelScheduled re-startar em
   let s = emptyState();
   s = addChannel(s, [ElectrodeMask.A, ElectrodeMask.B]);
   const chId = s.channels[0]!.id;
+  s = seedDcAmp(s, chId);
   const rig = new MixerRig(s);
 
   rig.engine.start();
@@ -349,6 +360,7 @@ test('ensureChannelScheduled: idempotent — anropas på existing runtime gör i
   let s = emptyState();
   s = addChannel(s, [ElectrodeMask.A, ElectrodeMask.B]);
   const chId = s.channels[0]!.id;
+  s = seedDcAmp(s, chId);
   const rig = new MixerRig(s);
   rig.engine.start();
   rig.clock.advance(0); // initial emit
@@ -363,6 +375,7 @@ test('ensureChannelScheduled: idempotent — anropas på existing runtime gör i
 test('addChannel mid-run: ensureChannelScheduled startar emission för ny channel', () => {
   let s = emptyState();
   s = addChannel(s, [ElectrodeMask.A, ElectrodeMask.B]);
+  s = seedDcAmp(s, s.channels[0]!.id);
   const rig = new MixerRig(s);
   rig.engine.start();
   rig.clock.advance(50_000);
@@ -370,6 +383,7 @@ test('addChannel mid-run: ensureChannelScheduled startar emission för ny channe
 
   // Lägg till ny channel mid-run
   s = addChannel(rig.state, [ElectrodeMask.C, ElectrodeMask.D]);
+  s = seedDcAmp(s, s.channels[s.channels.length - 1]!.id);
   rig.setState(s);
   const newCh = s.channels[s.channels.length - 1]!;
   rig.engine.ensureChannelScheduled(newCh.id);

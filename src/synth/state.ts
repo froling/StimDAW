@@ -574,7 +574,7 @@ export function addCable(
   sourceLfoId: string,
   destChannelId: string,
   destKnobName: 'pulseWidth' | 'pace' | 'amplitude',
-  depth: number = 0.5,
+  depth: number = 1.0,
 ): MixerState {
   // Validate refs — source kan vara LFO eller LfoChain
   const sourceExists =

@@ -224,14 +224,16 @@ export class SynthEngine {
  *
  * Två modeller beroende på knobKind:
  *
- * - 'amp' (post-fader VCA): knob.base är AMP-fader = mute-cap. Modulator
- *   positionerar mittenlinjen via volume × cap, swing håller sig inom
- *   headroom = min(center, cap-center) → vågformen ryms ALLTID inom
- *   [0, cap] (ingen AMP-orsakad clipping). Fader=0 → mute, oavsett LFO.
+ * - 'amp' (VCA): fadern är cap, LFO är signal-källan. Utan LFO-cable →
+ *   output=0 (mute, oavsett fader). Med LFO: modulator positionerar
+ *   mittenlinjen via volume × cap, swing håller sig inom headroom =
+ *   min(center, cap-center) → vågformen ryms ALLTID inom [0, cap]
+ *   (ingen AMP-orsakad clipping). Fader=0 → mute också.
  *
- * - 'pw' / 'pace' (Reason-style additive): swing = signal × depth × range,
- *   effective = clamp(base + swing). Hela range tillgängligt; min/max
- *   är hardware-floors, inte mute-koncept.
+ * - 'pw' / 'pace' (Reason-style additive): knob.base är DC-värde när
+ *   unmodulated. Med cable: swing = signal × depth × range, effective =
+ *   clamp(base + swing). Hela range tillgängligt; min/max är hardware-
+ *   floors, inte mute-koncept.
  *
  * Combined med negative-boost mode: positiv swing = +range, negativ
  * swing = -2×range (extra deep-dive). Med negative-only mode: signal
@@ -246,14 +248,24 @@ export function evaluateKnob(
   state: MixerState,
   knobKind: 'amp' | 'pw' | 'pace' = 'pw',
 ): number {
+  // AMP är VCA-style: fadern är cap, LFO är signal-källan. Utan LFO-cable
+  // finns ingen signal-source → output=0 (mute), oavsett fader-position.
+  // PW/PACE använder Reason-style: knob.base är DC-värde när unmodulated.
   if (knob.modCableId === null) {
+    if (knobKind === 'amp') return 0;
     return clamp(knob.base, bounds.min, bounds.max);
   }
   const cable = state.cables.find((c) => c.id === knob.modCableId);
-  if (!cable) return clamp(knob.base, bounds.min, bounds.max);
+  if (!cable) {
+    if (knobKind === 'amp') return 0;
+    return clamp(knob.base, bounds.min, bounds.max);
+  }
   // Source kan vara LFO eller LfoChain — lookupModulator hanterar båda.
   const modulator = lookupModulator(cable.sourceLfoId, state.lfos, state.chains);
-  if (!modulator) return clamp(knob.base, bounds.min, bounds.max);
+  if (!modulator) {
+    if (knobKind === 'amp') return 0;
+    return clamp(knob.base, bounds.min, bounds.max);
+  }
 
   // computeModulatorSignal dispatchar på modulator-typ (LFO med fri-fas
   // eller chain med phase-modell baserat på källa). Master-rate skalar alla
