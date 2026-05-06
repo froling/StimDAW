@@ -12,8 +12,9 @@
 
   let { lfo, color = '#8844cc' }: Props = $props();
 
-  // LFO rate-bounds: 0.01..50 Hz (logaritmisk för att täcka 4 dekader)
-  const RATE_BOUNDS = { min: 0.01, max: 50 } as const;
+  // LFO rate som multiplier mot master.masterRate (Hz). Effective Hz = rate × master.
+  // 0.1× till 10× — täcker 2 dekader, samma logaritmiska skala som master.
+  const RATE_BOUNDS = { min: 0.1, max: 10 } as const;
   const AMOUNT_BOUNDS = { min: 0, max: 1 } as const;
 
   const SHAPES: WaveShape[] = ['sine', 'saw', 'saw-down', 'square', 'triangle'];
@@ -156,7 +157,7 @@
       bounds={RATE_BOUNDS}
       log={true}
       defaultValue={1}
-      unit="hz"
+      unit="multiplier"
       label="Rate"
       onChange={setRate}
       size={42}

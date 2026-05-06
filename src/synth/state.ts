@@ -24,10 +24,19 @@ import type {
   WaveMode,
   WaveShape,
 } from './types';
-import { KNOB_DEFAULTS, LFO_RATE_MIN_HZ, LFO_RATE_MAX_HZ } from './types';
-import { reAnchorPhase } from './lfo';
+import {
+  KNOB_DEFAULTS,
+  LFO_RATE_MIN,
+  LFO_RATE_MAX,
+  MASTER_RATE_MIN_HZ,
+  MASTER_RATE_MAX_HZ,
+  PHASE_GLIDE_DURATION_MICROS,
+} from './types';
+import { effectiveLfoPhase } from './lfo';
 import type { Elcon } from '../patterns/types';
 import { checkElcon } from '../patterns/validate';
+
+const TWO_PI = Math.PI * 2;
 
 let nextIdCounter = 1;
 function nextId(prefix: string): string {
@@ -40,7 +49,7 @@ export function _resetIdsForTesting(): void {
 }
 
 export function emptyState(): MixerState {
-  return { channels: [], lfos: [], chains: [], cables: [] };
+  return { channels: [], lfos: [], chains: [], cables: [], masterRate: 1 };
 }
 
 // ── Channels ────────────────────────────────────────────────────────
@@ -135,11 +144,10 @@ export function setChannelEnabled(
 export function addLfo(state: MixerState, shape: WaveShape = 'sine'): MixerState {
   const lfo: LFO = {
     id: nextId('lfo'),
-    rate: 1, // 1Hz default
+    rate: 1, // 1.0 multiplier — samma takt som master
     amount: 1,
     shape,
     phase: 0,
-    phaseAnchorMicros: 0,
     mode: 'bipolar',
   };
   return { ...state, lfos: [...state.lfos, lfo] };
@@ -188,13 +196,13 @@ export function removeLfo(state: MixerState, lfoId: string): MixerState {
 }
 
 /**
- * Uppdatera LFO-rate. När `simNowMicros` ges re-ankras phase så signalen är
- * continuous över rate-bytet (ingen glitch). Anropa utan simNowMicros endast
- * från test-kod eller före engine-start; från UI/synth-store ska den alltid
- * skickas med (typiskt `performance.now() * 1000`).
+ * Uppdatera LFO-rate (multiplier mot master). När `simNowMicros` ges seedas
+ * en PhaseGlide så signalen är continuous över rate-bytet (ingen glitch),
+ * och konvergerar mot ny fri-fas inom glideDur (default 1s). Utan simNowMicros
+ * (test-kod eller före engine-start) byts rate utan glide.
  *
- * Rate clampas till LFO_RATE_MIN/MAX för att skydda mot programmatiska callers
- * som skipper Knob.svelte (Knob clampar redan via tToValue).
+ * Rate clampas till LFO_RATE_MIN/MAX som multiplier (inte Hz). Faktisk Hz
+ * = rate × masterRate.
  */
 export function setLfoRate(
   state: MixerState,
@@ -203,22 +211,98 @@ export function setLfoRate(
   simNowMicros?: number,
 ): MixerState {
   const safeRate = Number.isFinite(rate)
-    ? Math.max(LFO_RATE_MIN_HZ, Math.min(LFO_RATE_MAX_HZ, rate))
-    : LFO_RATE_MIN_HZ;
+    ? Math.max(LFO_RATE_MIN, Math.min(LFO_RATE_MAX, rate))
+    : LFO_RATE_MIN;
   return {
     ...state,
     lfos: state.lfos.map((l) => {
       if (l.id !== lfoId) return l;
-      if (simNowMicros === undefined) return { ...l, rate: safeRate };
-      // Re-anchor: beräkna current phase med GAMLA rate, sätt det som ny anchor
-      // → ny rate används framåt utan diskontinuitet.
-      const reAnchored = reAnchorPhase(l, simNowMicros, l.phaseAnchorMicros);
-      return {
-        ...reAnchored,
-        rate: safeRate,
-        phaseAnchorMicros: simNowMicros,
-      };
+      if (simNowMicros === undefined || safeRate === l.rate) {
+        return { ...l, rate: safeRate };
+      }
+      const glide = seedGlideForRateChange(l, safeRate, state.masterRate, simNowMicros);
+      return { ...l, rate: safeRate, phaseGlide: glide };
     }),
+  };
+}
+
+/**
+ * Hjälpare: räkna ut PhaseGlide-state så att signalen är continuous över
+ * rate-bytet (gammal phase vid simNow = ny phase vid simNow), och decayar
+ * till 0 (= synk med fri-fas) inom glideDur.
+ *
+ * old_effective_phase(simNow) = new_free_phase(simNow) + glide_at_start + lfo.phase
+ *   → glide_at_start = old_effective_phase - new_free_phase - lfo.phase
+ *
+ * Wrappar offset till [-π, π] för kortaste glide-väg.
+ */
+function seedGlideForRateChange(
+  lfo: LFO,
+  newRateMultiplier: number,
+  masterRate: number,
+  simNowMicros: number,
+): { offset: number; glideStartMicros: number; glideDurMicros: number } {
+  const oldPhase = effectiveLfoPhase(lfo, simNowMicros, masterRate);
+  const tSec = simNowMicros / 1_000_000;
+  const newRateHz = newRateMultiplier * masterRate;
+  const newFreePhase = ((TWO_PI * newRateHz * tSec) % TWO_PI + TWO_PI) % TWO_PI;
+  let offset = oldPhase - newFreePhase - lfo.phase;
+  // Wrap till kortaste väg ∈ [-π, π]
+  while (offset > Math.PI) offset -= TWO_PI;
+  while (offset < -Math.PI) offset += TWO_PI;
+  return {
+    offset,
+    glideStartMicros: simNowMicros,
+    glideDurMicros: PHASE_GLIDE_DURATION_MICROS,
+  };
+}
+
+/**
+ * Sätt master-clock i Hz. Alla LFOs får ny PhaseGlide så signalerna förblir
+ * continuous men konvergerar mot ny synk inom glideDur. Utan simNowMicros
+ * byts master utan glide.
+ */
+export function setMasterRate(
+  state: MixerState,
+  masterRate: number,
+  simNowMicros?: number,
+): MixerState {
+  const safeRate = Number.isFinite(masterRate)
+    ? Math.max(MASTER_RATE_MIN_HZ, Math.min(MASTER_RATE_MAX_HZ, masterRate))
+    : MASTER_RATE_MIN_HZ;
+  if (simNowMicros === undefined || safeRate === state.masterRate) {
+    return { ...state, masterRate: safeRate };
+  }
+  // Re-glide alla LFOs eftersom alla effective rates ändras synkront
+  const lfos = state.lfos.map((l) => {
+    const glide = seedGlideForMasterChange(l, safeRate, state.masterRate, simNowMicros);
+    return { ...l, phaseGlide: glide };
+  });
+  return { ...state, masterRate: safeRate, lfos };
+}
+
+/**
+ * Som seedGlideForRateChange men beräknar mot ändrad master istället för
+ * ändrad lfo.rate. Använder gamla masterRate för old_effective_phase och
+ * nya masterRate för new_free_phase.
+ */
+function seedGlideForMasterChange(
+  lfo: LFO,
+  newMasterRate: number,
+  oldMasterRate: number,
+  simNowMicros: number,
+): { offset: number; glideStartMicros: number; glideDurMicros: number } {
+  const oldPhase = effectiveLfoPhase(lfo, simNowMicros, oldMasterRate);
+  const tSec = simNowMicros / 1_000_000;
+  const newRateHz = lfo.rate * newMasterRate;
+  const newFreePhase = ((TWO_PI * newRateHz * tSec) % TWO_PI + TWO_PI) % TWO_PI;
+  let offset = oldPhase - newFreePhase - lfo.phase;
+  while (offset > Math.PI) offset -= TWO_PI;
+  while (offset < -Math.PI) offset += TWO_PI;
+  return {
+    offset,
+    glideStartMicros: simNowMicros,
+    glideDurMicros: PHASE_GLIDE_DURATION_MICROS,
   };
 }
 

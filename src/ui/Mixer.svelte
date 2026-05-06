@@ -7,13 +7,16 @@
     addChain,
     setActiveSource,
     updateKnobBase,
+    setMasterRate,
   } from './synth/synth-store.svelte';
   import MixerChannel from './synth/MixerChannel.svelte';
   import LFOModule from './synth/LFOModule.svelte';
   import LFOChainModule from './synth/LFOChainModule.svelte';
   import CableLayer from './synth/CableLayer.svelte';
   import MasterStrip from './synth/MasterStrip.svelte';
+  import Knob from './synth/Knob.svelte';
   import { lfoColor } from './synth/cable-helpers';
+  import { MASTER_RATE_MIN_HZ, MASTER_RATE_MAX_HZ } from '../synth/types';
   import { ElectrodeMask, type Elcon } from '../patterns/types';
   import type { MixerChannel as ChannelT } from '../synth/types';
   import { app, startMixer, stopMixer, setLogDescriptors } from './stores.svelte';
@@ -251,8 +254,22 @@
   <div class="section lfos-section">
     <div class="section-header">
       <span class="section-label">Modulators</span>
+      <span class="section-hint">LFO rate är multiplier mot master · ändra master för att dra alla synkront</span>
     </div>
     <div class="section-content">
+      <div class="master-clock-card" data-testid="master-clock-card">
+        <div class="master-clock-label">MASTER<br/>CLOCK</div>
+        <Knob
+          value={synth.current.masterRate}
+          bounds={{ min: MASTER_RATE_MIN_HZ, max: MASTER_RATE_MAX_HZ }}
+          log={true}
+          defaultValue={1}
+          unit="hz"
+          label="Hz"
+          onChange={(v) => setMasterRate(v)}
+          size={48}
+        />
+      </div>
       {#each synth.current.lfos as lfo, i (lfo.id)}
         <LFOModule {lfo} color={lfoColor(i)} />
       {/each}
@@ -500,6 +517,29 @@
     border-color: #cc6600;
     color: #cc6600;
     background: #fdf8f2;
+  }
+
+  .master-clock-card {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.6rem 0.5rem;
+    background: #fafafa;
+    border: 1px solid #d0d0d0;
+    border-radius: 6px;
+    /* Distinkt vänsterborder — DAW-konvention för master/transport */
+    border-left: 3px solid #cc0033;
+    min-width: 84px;
+  }
+  .master-clock-label {
+    font-family: ui-monospace, monospace;
+    font-size: 0.65rem;
+    font-weight: 700;
+    color: #cc0033;
+    letter-spacing: 0.06em;
+    text-align: center;
+    line-height: 1.1;
   }
 
   .footnote {

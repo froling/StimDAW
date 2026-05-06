@@ -12,6 +12,7 @@ import {
   setLfoAmount,
   setLfoShape,
   setLfoMode,
+  setMasterRate,
   addCable,
   removeCable,
   setCableDepth,
@@ -137,40 +138,86 @@ test('setLfoRate / setLfoAmount / setLfoShape', () => {
   expect(s.lfos[0]?.shape).toBe('triangle');
 });
 
-test('setLfoRate: clamps till LFO_RATE_MIN..MAX (0.01..50 Hz)', () => {
+test('setLfoRate: clamps till LFO_RATE_MIN..MAX (0.1..10 multiplier)', () => {
   let s = addLfo(emptyState());
   const id = s.lfos[0]!.id;
   s = setLfoRate(s, id, 999);
-  expect(s.lfos[0]?.rate).toBe(50);
+  expect(s.lfos[0]?.rate).toBe(10);
   s = setLfoRate(s, id, -5);
-  expect(s.lfos[0]?.rate).toBe(0.01);
+  expect(s.lfos[0]?.rate).toBe(0.1);
   s = setLfoRate(s, id, NaN);
-  expect(s.lfos[0]?.rate).toBe(0.01);
+  expect(s.lfos[0]?.rate).toBe(0.1);
   s = setLfoRate(s, id, Infinity);
-  expect(s.lfos[0]?.rate).toBe(0.01); // !isFinite → fallback till min
+  expect(s.lfos[0]?.rate).toBe(0.1);
 });
 
-test('setLfoRate: utan simNow → bara rate-update, phase oförändrat (test/legacy path)', () => {
+test('setLfoRate: utan simNow → bara rate-update, ingen glide seedad', () => {
   let s = addLfo(emptyState());
   const id = s.lfos[0]!.id;
-  s = { ...s, lfos: s.lfos.map((l) => ({ ...l, phase: Math.PI / 4, phaseAnchorMicros: 100 })) };
   s = setLfoRate(s, id, 5);
   expect(s.lfos[0]?.rate).toBe(5);
-  expect(s.lfos[0]?.phase).toBeCloseTo(Math.PI / 4, 6);
-  expect(s.lfos[0]?.phaseAnchorMicros).toBe(100);
+  expect(s.lfos[0]?.phaseGlide).toBeUndefined();
 });
 
-test('setLfoRate: med simNow → re-ankrar phase så signal är continuous över rate-bytet', () => {
-  // Givet en LFO vid 1Hz som varit aktiv 0.25s (kvart-cykel = π/2)
+test('setLfoRate: med simNow → seedar phaseGlide för smooth convergens', () => {
+  // 1× → 5× vid t=250ms (kvart cykel av gamla effective rate 1Hz, master=1)
   let s = addLfo(emptyState());
   const id = s.lfos[0]!.id;
-  // simNow = 250_000µs (kvart period vid 1Hz). Phase vid den tiden = 0 + 2π·1·0.25 = π/2.
   s = setLfoRate(s, id, 5, 250_000);
   expect(s.lfos[0]?.rate).toBe(5);
-  expect(s.lfos[0]?.phase).toBeCloseTo(Math.PI / 2, 6);
-  expect(s.lfos[0]?.phaseAnchorMicros).toBe(250_000);
-  // Verifiera continuity: computeLfoSignal vid t=250_000 ska ge sin(π/2)=1
-  // (samma som FÖRE rate-byte).
+  expect(s.lfos[0]?.phaseGlide).toBeDefined();
+  expect(s.lfos[0]?.phaseGlide?.glideStartMicros).toBe(250_000);
+  // Glide ska wrappa till [-π, π]
+  const offset = s.lfos[0]!.phaseGlide!.offset;
+  expect(offset).toBeGreaterThanOrEqual(-Math.PI - 1e-6);
+  expect(offset).toBeLessThanOrEqual(Math.PI + 1e-6);
+});
+
+test('setLfoRate: samma rate → ingen glide (idempotent)', () => {
+  let s = addLfo(emptyState());
+  const id = s.lfos[0]!.id;
+  s = setLfoRate(s, id, 1, 250_000); // rate var redan 1
+  expect(s.lfos[0]?.phaseGlide).toBeUndefined();
+});
+
+// ── Master rate ───────────────────────────────────────────────────────
+
+test('emptyState: masterRate default = 1.0', () => {
+  expect(emptyState().masterRate).toBe(1);
+});
+
+test('setMasterRate: byter master-Hz, clampas till [0.05, 10]', () => {
+  let s = setMasterRate(emptyState(), 5);
+  expect(s.masterRate).toBe(5);
+  s = setMasterRate(s, 999);
+  expect(s.masterRate).toBe(10);
+  s = setMasterRate(s, 0.001);
+  expect(s.masterRate).toBe(0.05);
+  s = setMasterRate(s, NaN);
+  expect(s.masterRate).toBe(0.05);
+});
+
+test('setMasterRate: med simNow → re-glidar alla LFOs', () => {
+  let s = addLfo(emptyState());
+  s = addLfo(s);
+  s = setMasterRate(s, 2, 250_000);
+  expect(s.masterRate).toBe(2);
+  for (const lfo of s.lfos) {
+    expect(lfo.phaseGlide).toBeDefined();
+    expect(lfo.phaseGlide?.glideStartMicros).toBe(250_000);
+  }
+});
+
+test('setMasterRate: utan simNow → ingen glide seedad', () => {
+  let s = addLfo(emptyState());
+  s = setMasterRate(s, 2);
+  expect(s.lfos[0]?.phaseGlide).toBeUndefined();
+});
+
+test('setMasterRate: samma värde → ingen glide (idempotent)', () => {
+  let s = addLfo(emptyState());
+  s = setMasterRate(s, 1, 250_000); // master var redan 1
+  expect(s.lfos[0]?.phaseGlide).toBeUndefined();
 });
 
 test('addLfo: defaultar mode till bipolar', () => {
@@ -326,6 +373,7 @@ test('validateInvariants: detekterar dangling cable till obefintlig LFO', () => 
     lfos: [],
     chains: [],
     cables: [{ id: 'c1', sourceLfoId: 'ghost', destChannelId: 'ghost-ch', destKnobName: 'pulseWidth' as const, depth: 0.5 }],
+    masterRate: 1,
   };
   const issues = validateInvariants(invalid);
   expect(issues.length).toBeGreaterThan(0);

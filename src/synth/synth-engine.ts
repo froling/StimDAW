@@ -246,9 +246,16 @@ export function evaluateKnob(
   const modulator = lookupModulator(cable.sourceLfoId, state.lfos, state.chains);
   if (!modulator) return clamp(knob.base, bounds.min, bounds.max);
 
-  // computeModulatorSignal dispatchar på modulator-typ (LFO med phase-anchor
-  // eller chain med trigger-baserad phase-reset från source).
-  const signal = computeModulatorSignal(modulator, tMicros, state.lfos, state.chains);
+  // computeModulatorSignal dispatchar på modulator-typ (LFO med fri-fas
+  // eller chain med phase-modell baserat på källa). Master-rate skalar alla
+  // LFO-rates uniformt.
+  const signal = computeModulatorSignal(
+    modulator,
+    tMicros,
+    state.lfos,
+    state.chains,
+    state.masterRate,
+  );
   const range = bounds.max - bounds.min;
   const swing = signal * cable.depth * range;
   return clamp(knob.base + swing, bounds.min, bounds.max);

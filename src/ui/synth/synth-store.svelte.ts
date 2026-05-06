@@ -69,6 +69,13 @@ export function setChannelElcon(channelId: string, elcon: Elcon): void {
   synth.current = state.setChannelElcon(synth.current, channelId, elcon);
 }
 
+// ── Master clock ───────────────────────────────────────────────────
+
+export function setMasterRate(masterRateHz: number): void {
+  // Pass wall-time så alla LFOs får smooth glide under master-rate-byte.
+  synth.current = state.setMasterRate(synth.current, masterRateHz, performance.now() * 1000);
+}
+
 // ── LFO actions ────────────────────────────────────────────────────
 
 export function addLfo(shape: WaveShape = 'sine'): void {

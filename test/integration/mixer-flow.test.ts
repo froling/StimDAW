@@ -274,44 +274,40 @@ test('Engine: start utan channels är no-op (no errors)', () => {
   expect(rig.engine.isRunning()).toBe(true);
 });
 
-// ── Rate-change phase-continuity (regression for setLfoRate glitch) ──
+// ── Rate-change phase-continuity (regression for setLfoRate glide) ──
 
-test('setLfoRate re-ankrar phase: signal continuous över rate-bytet (no glitch)', () => {
-  // Pure unit-test för bug-fixen: utan re-anchor skulle signal hoppa när
-  // rate ändras eftersom dt-multiplikatorn bara byts. Med re-anchor förblir
-  // sample-värdet vid rate-change-tidpunkten samma, sen oscillerar med ny rate.
+test('setLfoRate seedar PhaseGlide → signal continuous över rate-bytet (no click)', () => {
+  // Phase-modellen: gamla rate ger phase vid tChange. Efter rate-byte seedas
+  // en glide vars offset = (gamla_phase - nya_fri_phase). Vid t=tChange ger
+  // computeLfoSignal samma värde som före → continuity. Glide decayar mot 0
+  // över glideDur så LFO konvergerar till deterministisk fri-fas.
   let s = emptyState();
-  s = addLfo(s); // 1Hz, sine, phase=0, anchor=0
+  s = addLfo(s); // 1× multiplier, master=1 → 1Hz effective
   const id = s.lfos[0]!.id;
 
   // Vid t=250_000µs (kvart-cykel @ 1Hz) ska sine vara +1
   const tChange = 250_000;
-  const sigBefore = computeLfoSignal(s.lfos[0]!, tChange, s.lfos[0]!.phaseAnchorMicros);
+  const sigBefore = computeLfoSignal(s.lfos[0]!, tChange, s.masterRate);
   expect(sigBefore).toBeCloseTo(1, 6);
 
-  // Re-anchor till t=tChange med ny rate 5Hz
+  // Byt rate till 5× (= 5Hz) vid tChange
   s = setLfoRate(s, id, 5, tChange);
 
-  // Signalen vid EXAKT tChange (omedelbart efter rate-byte) ska vara samma som före
-  // (continuity-krav: ingen diskontinuitet).
-  const sigAfter = computeLfoSignal(s.lfos[0]!, tChange, s.lfos[0]!.phaseAnchorMicros);
+  // Continuity: signal vid EXAKT tChange är samma som före rate-bytet
+  const sigAfter = computeLfoSignal(s.lfos[0]!, tChange, s.masterRate);
   expect(sigAfter).toBeCloseTo(sigBefore, 6);
 
-  // Och från och med tChange oscillerar den med 5Hz (ny rate). Vid en kvart
-  // av 5Hz-period efter tChange (= 50_000µs senare = tChange + 50_000) ska
-  // signalen vara nästan -1 (sin(π/2 + 2π·5·0.05) = sin(π/2 + π/2) = sin(π) ≈ 0).
-  // Nej — sin(π/2 + π/2) = sin(π) = 0. OK testa det.
-  const sigQuarterLater = computeLfoSignal(s.lfos[0]!, tChange + 50_000, s.lfos[0]!.phaseAnchorMicros);
-  expect(sigQuarterLater).toBeCloseTo(0, 5);
+  // PhaseGlide ska vara seedad
+  expect(s.lfos[0]?.phaseGlide).toBeDefined();
+  expect(s.lfos[0]?.phaseGlide?.glideStartMicros).toBe(tChange);
 });
 
-test('setLfoRate UTAN simNow → phase NOT re-ankrad (legacy/test path)', () => {
+test('setLfoRate UTAN simNow → ingen glide seedad (legacy/test path)', () => {
   let s = emptyState();
   s = addLfo(s);
   const id = s.lfos[0]!.id;
-  // Ingen simNow → bara rate-update, anchor förblir 0
   s = setLfoRate(s, id, 5);
-  expect(s.lfos[0]?.phaseAnchorMicros).toBe(0);
+  expect(s.lfos[0]?.phaseGlide).toBeUndefined();
 });
 
 // ── Re-enable channel mid-run (regression for runtime-leak fix) ─────

@@ -2,7 +2,7 @@
  * LfoChain compute + state-mutator-tester.
  *
  * Verifierar:
- * - effectiveRate rekursiv (LFO → chain → chain)
+ * - effectiveChainPhase rekursiv (LFO → chain → chain) inkl. ALT-multiplikation
  * - computeChainSignal: trigger sync/offset/alternate semantik
  * - lookupModulator hittar både LFOs och chains
  * - addChain: cycle-detection + dangling source-rejection
@@ -12,7 +12,8 @@ import { test, expect, beforeEach } from 'bun:test';
 import {
   computeChainSignal,
   computeModulatorSignal,
-  effectiveRate,
+  effectiveChainPhase,
+  effectiveLfoPhase,
   lookupModulator,
 } from '../../src/synth/lfo';
 import {
@@ -24,7 +25,6 @@ import {
   removeChain,
   removeLfo,
   setChainSource,
-  setLfoRate,
   validateInvariants,
   _resetIdsForTesting,
 } from '../../src/synth/state';
@@ -57,49 +57,54 @@ test('lookupModulator returnerar undefined för okänd id', () => {
   expect(lookupModulator('lfo-999', s.lfos, s.chains)).toBeUndefined();
 });
 
-// ── effectiveRate ───────────────────────────────────────────────────
+// ── effectiveChainPhase: phase-trajektoria via källan ──────────────
 
-test('effectiveRate för LFO returnerar lfo.rate', () => {
-  const s = setLfoRate(addLfo(emptyState()), 'lfo-1', 5);
-  const lfo = s.lfos[0]!;
-  expect(effectiveRate(lfo, s.lfos, s.chains)).toBe(5);
-});
-
-test('effectiveRate för chain (trigger=sync) = source rate', () => {
-  let s = addLfo(emptyState()); // 1Hz default
-  s = setLfoRate(s, 'lfo-1', 2);
+test('effectiveChainPhase SYNC = källans phase (samma trajectory)', () => {
+  let s = addLfo(emptyState()); // 1Hz default, master=1
   s = addChain(s, 'lfo-1', { trigger: 'sync' });
   const chain = s.chains[0]!;
-  expect(effectiveRate(chain, s.lfos, s.chains)).toBe(2);
+  // Vid t=250ms, källan har phase=π/2. SYNC chain ska ge samma.
+  const sourcePhase = effectiveLfoPhase(s.lfos[0]!, 250_000, 1);
+  const chainPhase = effectiveChainPhase(chain, 250_000, 1, s.lfos, s.chains);
+  expect(chainPhase).toBeCloseTo(sourcePhase, 6);
+  expect(chainPhase).toBeCloseTo(Math.PI / 2, 6);
 });
 
-test('effectiveRate för chain (trigger=offset) = source rate (samma som sync)', () => {
-  let s = setLfoRate(addLfo(emptyState()), 'lfo-1', 2);
+test('effectiveChainPhase OFFSET = källans phase + π (mod 2π)', () => {
+  let s = addLfo(emptyState());
   s = addChain(s, 'lfo-1', { trigger: 'offset' });
   const chain = s.chains[0]!;
-  expect(effectiveRate(chain, s.lfos, s.chains)).toBe(2);
+  // Vid t=250ms, källans phase=π/2. OFFSET chain phase = π/2 + π = 3π/2.
+  expect(effectiveChainPhase(chain, 250_000, 1, s.lfos, s.chains)).toBeCloseTo(
+    3 * Math.PI / 2,
+    6,
+  );
 });
 
-test('effectiveRate för chain (trigger=alternate) = source rate × 2', () => {
-  let s = setLfoRate(addLfo(emptyState()), 'lfo-1', 2);
+test('effectiveChainPhase ALT = 2 × källans phase (mod 2π)', () => {
+  let s = addLfo(emptyState());
   s = addChain(s, 'lfo-1', { trigger: 'alternate' });
   const chain = s.chains[0]!;
-  expect(effectiveRate(chain, s.lfos, s.chains)).toBe(4);
+  // Vid t=125ms, källans phase=π/4. ALT chain phase = π/2.
+  expect(effectiveChainPhase(chain, 125_000, 1, s.lfos, s.chains)).toBeCloseTo(
+    Math.PI / 2,
+    6,
+  );
 });
 
-test('effectiveRate för nested chains: bara ALT multiplicerar rate', () => {
-  let s = setLfoRate(addLfo(emptyState()), 'lfo-1', 1); // 1Hz
-  s = addChain(s, 'lfo-1', { trigger: 'alternate' }); // chain-2: 2Hz
-  s = addChain(s, 'chain-2', { trigger: 'alternate' }); // chain-3: 4Hz
-  s = addChain(s, 'chain-3', { trigger: 'sync' }); // chain-4: 4Hz (sync inherits)
-  s = addChain(s, 'chain-4', { trigger: 'offset' }); // chain-5: 4Hz (offset inherits)
-  expect(effectiveRate(s.chains[0]!, s.lfos, s.chains)).toBe(2);
-  expect(effectiveRate(s.chains[1]!, s.lfos, s.chains)).toBe(4);
-  expect(effectiveRate(s.chains[2]!, s.lfos, s.chains)).toBe(4);
-  expect(effectiveRate(s.chains[3]!, s.lfos, s.chains)).toBe(4);
+test('effectiveChainPhase nested: ALT-link multiplicerar phase 2× ner i kedjan', () => {
+  let s = addLfo(emptyState());
+  s = addChain(s, 'lfo-1', { trigger: 'alternate' }); // chain-2: 2× phase
+  s = addChain(s, 'chain-2', { trigger: 'alternate' }); // chain-3: 4× phase
+  s = addChain(s, 'chain-3', { trigger: 'sync' }); // chain-4: SYNC ärver chain-3 (4×)
+  // Vid t=62.5ms, lfo-1 phase=π/8. chain-3 phase = 4 × π/8 = π/2. chain-4 = π/2.
+  expect(effectiveChainPhase(s.chains[2]!, 62_500, 1, s.lfos, s.chains)).toBeCloseTo(
+    Math.PI / 2,
+    6,
+  );
 });
 
-test('effectiveRate returnerar 0 vid dangling source', () => {
+test('effectiveChainPhase: dangling source → 0', () => {
   const dangling: LfoChain = {
     id: 'chain-99',
     sourceId: 'lfo-nonexistent',
@@ -108,7 +113,17 @@ test('effectiveRate returnerar 0 vid dangling source', () => {
     amount: 1,
     mode: 'bipolar',
   };
-  expect(effectiveRate(dangling, [], [dangling])).toBe(0);
+  expect(effectiveChainPhase(dangling, 250_000, 1, [], [dangling])).toBe(0);
+});
+
+test('effectiveChainPhase: cycle-skydd via visited-set', () => {
+  // Konstruera invalid state direkt med cycle (validateInvariants flaggar)
+  const invalidChains: LfoChain[] = [
+    { id: 'chain-1', sourceId: 'chain-2', trigger: 'sync', shape: 'sine', amount: 1, mode: 'bipolar' },
+    { id: 'chain-2', sourceId: 'chain-1', trigger: 'sync', shape: 'sine', amount: 1, mode: 'bipolar' },
+  ];
+  // Ska terminera (inte stack-overflow) och returnera 0
+  expect(effectiveChainPhase(invalidChains[0]!, 100_000, 1, [], invalidChains)).toBe(0);
 });
 
 // ── computeChainSignal: SYNC mode ───────────────────────────────────
@@ -380,6 +395,7 @@ test('validateInvariants: dangling chain.sourceId flaggas', () => {
       mode: 'bipolar' as const,
     }],
     cables: [],
+    masterRate: 1,
   };
   const issues = validateInvariants(invalid);
   expect(issues.some((i) => i.includes('chain-1') && i.includes('source'))).toBe(true);

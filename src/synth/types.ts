@@ -42,35 +42,69 @@ export interface KnobState {
 }
 
 /**
+ * Smooth phase-glide-state efter rate-change. När user vrider på rate
+ * (LFO eller master) skapas en glide som decayar till 0 över glideDur.
+ *
+ * Modell: effectivePhase = freePhase(t, currentRate) + glideOffset(t).
+ * Vid t = glideStart är glideOffset = offset (continuous med gamla raten).
+ * Vid t = glideStart + glideDur är glideOffset = 0 (synkad med fri-fasen).
+ *
+ * Mellan dessa punkter linjär interpolation: glide = offset × (1 - progress).
+ * När glide expirerar är LFO i deterministisk fri-fas — alla LFOs med samma
+ * effective Hz är då i fas, oberoende av tidigare rate-byten.
+ */
+export interface PhaseGlide {
+  /** Offset från fri-fas i radianer. Wrappad till kortaste väg ∈ [-π, π]. */
+  readonly offset: number;
+  /** Sim-tid (µs) då glide startade. */
+  readonly glideStartMicros: number;
+  /** Total glide-tid i µs. Default 1 sekund. */
+  readonly glideDurMicros: number;
+}
+
+/**
  * Low-frequency oscillator. Independent generator, can patch into multiple
- * knobs via cables. Phase är intern radians 0..2π, free-running.
+ * knobs via cables.
+ *
+ * Rate är **multiplier** mot synth.masterRate (Hz). Effektiv frekvens =
+ * lfo.rate × master.masterRate. Default 1.0 = samma som master. Master
+ * fungerar som DAW-style "tempo-knob" som drar alla LFOs synkront.
+ *
+ * Phase-modell: fri-fas (deterministisk vid t=0) + konstant user-offset
+ * (lfo.phase) + decaying glide-offset från rate-change. Vid t=0 startar
+ * alla LFOs på phase 0 (sine korsar uppåt) — predictable timing.
  */
 export interface LFO {
   readonly id: string;
-  /** Frekvens i Hz, 0.01..50. rate=0 ger DC-output (ingen oscillation). */
+  /** Multiplier mot masterRate. Effective Hz = rate × masterRate. */
   readonly rate: number;
   /** Master output gain 0..1. amount=0 silences LFOn helt. */
   readonly amount: number;
   readonly shape: WaveShape;
-  /** Internal phase i radians, ackumulerar via dt × 2π × rate från phaseAnchorMicros. */
+  /** User-set konstant fas-offset (rad). Default 0. */
   readonly phase: number;
   /**
-   * Tid (sim-µs) då phase var sant. computeLfoSignal beräknar effektiv phase som
-   * `phase + 2π × rate × (now - phaseAnchorMicros) / 1M`. setLfoRate re-ankrar
-   * vid rate-byte så signalen är continuous över bytet (annars phase-glitch).
+   * Optional smooth-glide efter rate-change. Konvergerar mot fri-fas så
+   * signal är continuous initialt men deterministisk efter glideDur.
    */
-  readonly phaseAnchorMicros: number;
+  readonly phaseGlide?: PhaseGlide;
   /**
    * Polaritets-mode (default 'bipolar'). Asymmetrisk transform applicerad
    * efter waveform → ger boost-negative eller negative-only-modulering.
-   * Optional för back-compat med pre-existing LFO-snapshots.
    */
   readonly mode?: WaveMode;
 }
 
-/** Hardware/UX bounds för LFO rate. Synkat med LFOModule.svelte RATE_BOUNDS. */
-export const LFO_RATE_MIN_HZ = 0.01;
-export const LFO_RATE_MAX_HZ = 50;
+/** Bounds för LFO rate-multiplier. UI använder logaritmisk scale. */
+export const LFO_RATE_MIN = 0.1;
+export const LFO_RATE_MAX = 10;
+
+/** Bounds för master-clock i Hz. Master * LFO-multiplier = effective Hz. */
+export const MASTER_RATE_MIN_HZ = 0.05;
+export const MASTER_RATE_MAX_HZ = 10;
+
+/** Default glide-tid efter rate-change (µs). 1 sekund — smooth men inte trögt. */
+export const PHASE_GLIDE_DURATION_MICROS = 1_000_000;
 
 /**
  * Mixer channel — en per elcon-par. Tre knobs (pulse_width, pace, amplitude),
@@ -121,13 +155,19 @@ export interface ChannelRuntime {
 export type ChainTrigger = 'sync' | 'offset' | 'alternate';
 
 /**
- * LfoChain — slav-modulator vars rate styrs av en source-modulator
+ * LfoChain — slav-modulator vars phase följer en source-modulator
  * (LFO eller annan LfoChain). Har samma val som LFO (shape, mode,
- * amount) men ingen egen rate. Triggrar fas-reset vid hel- eller halv-
- * cykel av sin source. Kan kedjas djupt så långa pulståg byggs.
+ * amount) men ingen egen rate.
  *
- * Effective rate = source_effective_rate × (trigger === 'half' ? 2 : 1).
- * Phase vid tid t = (t mod trigger_interval) / trigger_interval × 2π.
+ * Phase-modell: chain.phase = f(source.phase, trigger):
+ *   - 'sync': chain.phase = source.phase
+ *   - 'offset': chain.phase = source.phase + π (mod 2π)
+ *   - 'alternate': chain.phase = 2 × source.phase (mod 2π), gated till
+ *     källans negativa halva (computeChainSignal returnerar 0 när
+ *     källans signal-värde ≥ 0).
+ *
+ * Eftersom chain läser källans `effectivePhase` (inkl glide) så ärvs
+ * smooth-glide automatiskt vid rate-change.
  *
  * sourceId pekar på id för en LFO ('lfo-N') eller LfoChain ('chain-N').
  * Cycle detection vid addChain/setChainSource förhindrar self-ref + loops.
@@ -189,6 +229,15 @@ export interface MixerState {
   readonly lfos: readonly LFO[];
   readonly chains: readonly LfoChain[];
   readonly cables: readonly Cable[];
+  /**
+   * Master-clock i Hz. Alla LFO-rates är multipliers av denna — fungerar
+   * som DAW-style tempo-knob. Default 1.0 Hz. Range: 0.05..10.
+   *
+   * Phase-modell: vid t=0 är alla LFOs på phase 0. Vid rate-change (master
+   * eller LFO) seedar mutators en PhaseGlide så signalen är continuous men
+   * konvergerar mot fri-fas inom glideDur (default 1s).
+   */
+  readonly masterRate: number;
 }
 
 /**

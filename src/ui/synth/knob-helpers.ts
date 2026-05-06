@@ -97,7 +97,7 @@ export function dragDeltaToValue(
  *   amp byte 128 → { display: '50', unit: '%' }     ('percent' = 0..255 → 0..100)
  *   LFO amount 0.8 → { display: '80', unit: '%' }   ('fraction' = 0..1 → 0..100)
  */
-export type KnobUnit = 'us' | 'ms' | 'percent' | 'fraction' | 'hz';
+export type KnobUnit = 'us' | 'ms' | 'percent' | 'fraction' | 'hz' | 'multiplier';
 
 export function formatKnobValue(
   value: number,
@@ -116,5 +116,8 @@ export function formatKnobValue(
       return { display: Math.round(value * 100).toString(), suffix: '%' };
     case 'hz':
       return { display: value.toFixed(2), suffix: 'Hz' };
+    case 'multiplier':
+      // LFO rate som multiplier mot master. 1.00 = samma takt, 0.50 = halv, 2.00 = dubbla.
+      return { display: value.toFixed(2), suffix: '×' };
   }
 }
