@@ -146,6 +146,9 @@ export function addLfo(state: MixerState, shape: WaveShape = 'sine'): MixerState
     id: nextId('lfo'),
     rate: 1, // 1.0 multiplier — samma takt som master
     amount: 1,
+    // 0.5 = mittenlinje vid halv AMP-cap → maximalt symmetric headroom,
+    // full ±cap/2 swing möjlig direkt från default
+    volume: 0.5,
     shape,
     phase: 0,
     mode: 'bipolar',
@@ -315,6 +318,19 @@ export function setLfoAmount(state: MixerState, lfoId: string, amount: number): 
   };
 }
 
+/**
+ * Sätt LFO bias-position (0..1). Påverkar bara AMP-cables (post-fader VCA).
+ * volume=0 = mute, 0.5 = mittenlinje, 1 = top av cap (då headroom=0).
+ */
+export function setLfoVolume(state: MixerState, lfoId: string, volume: number): MixerState {
+  return {
+    ...state,
+    lfos: state.lfos.map((l) =>
+      l.id !== lfoId ? l : { ...l, volume: Math.max(0, Math.min(1, volume)) },
+    ),
+  };
+}
+
 export function setLfoShape(state: MixerState, lfoId: string, shape: WaveShape): MixerState {
   return {
     ...state,
@@ -396,6 +412,7 @@ export function addChain(
     trigger?: ChainTrigger;
     shape?: WaveShape;
     amount?: number;
+    volume?: number;
     mode?: WaveMode;
   } = {},
 ): MixerState {
@@ -417,6 +434,7 @@ export function addChain(
     trigger: options.trigger ?? 'alternate',
     shape: options.shape ?? 'sine',
     amount: options.amount ?? 1,
+    volume: options.volume ?? 0.5,
     mode: options.mode ?? 'bipolar',
   };
   return { ...state, chains: [...state.chains, chain] };
@@ -513,6 +531,20 @@ export function setChainAmount(
     ...state,
     chains: state.chains.map((c) =>
       c.id !== chainId ? c : { ...c, amount: Math.max(0, Math.min(1, amount)) },
+    ),
+  };
+}
+
+/** Sätt chain bias-position (0..1). Samma semantik som setLfoVolume. */
+export function setChainVolume(
+  state: MixerState,
+  chainId: string,
+  volume: number,
+): MixerState {
+  return {
+    ...state,
+    chains: state.chains.map((c) =>
+      c.id !== chainId ? c : { ...c, volume: Math.max(0, Math.min(1, volume)) },
     ),
   };
 }

@@ -1,6 +1,6 @@
 <script lang="ts">
   import Knob from './Knob.svelte';
-  import { synth, setLfoRate, setLfoAmount, setLfoShape, setLfoMode, removeLfo } from './synth-store.svelte';
+  import { synth, setLfoRate, setLfoAmount, setLfoVolume, setLfoShape, setLfoMode, removeLfo } from './synth-store.svelte';
   import { elconToLabel } from '../../patterns/types';
   import type { LFO, WaveMode, WaveShape } from '../../synth/types';
 
@@ -16,6 +16,7 @@
   // 0.1× till 10× — täcker 2 dekader, samma logaritmiska skala som master.
   const RATE_BOUNDS = { min: 0.1, max: 10 } as const;
   const AMOUNT_BOUNDS = { min: 0, max: 1 } as const;
+  const VOLUME_BOUNDS = { min: 0, max: 1 } as const;
 
   const SHAPES: WaveShape[] = ['sine', 'saw', 'saw-down', 'square', 'triangle'];
   const SHAPE_GLYPHS: Record<WaveShape, string> = {
@@ -83,6 +84,10 @@
 
   function setAmount(amount: number): void {
     setLfoAmount(lfo.id, amount);
+  }
+
+  function setVolume(volume: number): void {
+    setLfoVolume(lfo.id, volume);
   }
 
   function pickShape(shape: WaveShape): void {
@@ -169,6 +174,15 @@
       unit="fraction"
       label="Amount"
       onChange={(v) => setAmount(Math.max(0, Math.min(1, v)))}
+      size={42}
+    />
+    <Knob
+      value={lfo.volume}
+      bounds={VOLUME_BOUNDS}
+      defaultValue={0.5}
+      unit="fraction"
+      label="Volume"
+      onChange={(v) => setVolume(Math.max(0, Math.min(1, v)))}
       size={42}
     />
   </div>
@@ -306,7 +320,9 @@
 
   .knobs {
     display: flex;
+    flex-wrap: wrap;
     justify-content: space-around;
+    gap: 0.3rem 0.2rem;
     padding: 0.3rem 0;
   }
 

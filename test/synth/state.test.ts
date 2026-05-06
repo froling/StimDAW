@@ -12,6 +12,7 @@ import {
   setLfoAmount,
   setLfoShape,
   setLfoMode,
+  setLfoVolume,
   setMasterRate,
   addCable,
   removeCable,
@@ -223,6 +224,22 @@ test('setMasterRate: samma värde → ingen glide (idempotent)', () => {
 test('addLfo: defaultar mode till bipolar', () => {
   const s = addLfo(emptyState());
   expect(s.lfos[0]?.mode).toBe('bipolar');
+});
+
+test('addLfo: defaultar volume till 0.5 (mid → maximalt symmetric headroom)', () => {
+  const s = addLfo(emptyState());
+  expect(s.lfos[0]?.volume).toBe(0.5);
+});
+
+test('setLfoVolume: clampar till [0, 1]', () => {
+  let s = addLfo(emptyState());
+  const id = s.lfos[0]!.id;
+  s = setLfoVolume(s, id, 0.8);
+  expect(s.lfos[0]?.volume).toBe(0.8);
+  s = setLfoVolume(s, id, 5);
+  expect(s.lfos[0]?.volume).toBe(1);
+  s = setLfoVolume(s, id, -3);
+  expect(s.lfos[0]?.volume).toBe(0);
 });
 
 test('setLfoMode: byter mellan bipolar / negative-boost / negative-only', () => {

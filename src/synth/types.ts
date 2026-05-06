@@ -78,8 +78,23 @@ export interface LFO {
   readonly id: string;
   /** Multiplier mot masterRate. Effective Hz = rate × masterRate. */
   readonly rate: number;
-  /** Master output gain 0..1. amount=0 silences LFOn helt. */
+  /**
+   * Vågformens swing-amplitud (0..1). amount=0 silences swing helt
+   * (LFO blir ren DC vid volume). amount=1 = full swing inom headroom.
+   */
   readonly amount: number;
+  /**
+   * Bias-position inom AMP-cap (0..1, default 0.5). Bestämmer vågformens
+   * mittenlinje och därmed tillgängligt headroom mot AMP-fader-kanten.
+   * volume=0.5 ger maximalt symmetric headroom (±cap/2 swing möjlig).
+   * volume→0 eller →1 krymper headroom → swing-amplitud minskar
+   * proportionellt så hela vågformen ALLTID ryms inom [0, AMP-cap]
+   * (inget AMP-orsakat klipping av vågformen).
+   *
+   * Påverkar bara AMP-cables. PW/PACE-cables ignorerar volume (Reason-
+   * style additive runt knob.base).
+   */
+  readonly volume: number;
   readonly shape: WaveShape;
   /** User-set konstant fas-offset (rad). Default 0. */
   readonly phase: number;
@@ -178,8 +193,10 @@ export interface LfoChain {
   readonly sourceId: string;
   /** När waveform-cykeln triggas relativt source-cykel. */
   readonly trigger: ChainTrigger;
-  /** Master output gain 0..1, samma semantik som LFO.amount. */
+  /** Vågformens swing-amplitud (0..1), samma semantik som LFO.amount. */
   readonly amount: number;
+  /** Bias-position inom AMP-cap (0..1, default 0.5). Se LFO.volume. */
+  readonly volume: number;
   readonly shape: WaveShape;
   /** Polaritets-mode (default 'bipolar'). */
   readonly mode?: WaveMode;

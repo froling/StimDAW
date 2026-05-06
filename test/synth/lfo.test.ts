@@ -11,6 +11,7 @@ function makeLfo(overrides: Partial<LFO> = {}): LFO {
     id: 'lfo-1',
     rate: 1, // 1× multiplier — med masterRate=1 ger 1Hz
     amount: 1,
+    volume: 0.5,
     shape: 'sine',
     phase: 0,
     ...overrides,

@@ -97,6 +97,10 @@ export function setLfoAmount(lfoId: string, amount: number): void {
   synth.current = state.setLfoAmount(synth.current, lfoId, amount);
 }
 
+export function setLfoVolume(lfoId: string, volume: number): void {
+  synth.current = state.setLfoVolume(synth.current, lfoId, volume);
+}
+
 export function setLfoShape(lfoId: string, shape: WaveShape): void {
   synth.current = state.setLfoShape(synth.current, lfoId, shape);
 }
@@ -139,6 +143,10 @@ export function setChainShape(chainId: string, shape: WaveShape): void {
 
 export function setChainAmount(chainId: string, amount: number): void {
   synth.current = state.setChainAmount(synth.current, chainId, amount);
+}
+
+export function setChainVolume(chainId: string, volume: number): void {
+  synth.current = state.setChainVolume(synth.current, chainId, volume);
 }
 
 export function setChainMode(chainId: string, mode: WaveMode): void {

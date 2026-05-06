@@ -6,6 +6,7 @@
     setChainTrigger,
     setChainShape,
     setChainAmount,
+    setChainVolume,
     setChainMode,
     removeChain,
   } from './synth-store.svelte';
@@ -97,6 +98,10 @@
 
   function setAmount(amount: number): void {
     setChainAmount(chain.id, Math.max(0, Math.min(1, amount)));
+  }
+
+  function setVolume(volume: number): void {
+    setChainVolume(chain.id, Math.max(0, Math.min(1, volume)));
   }
 
   function pickMode(mode: WaveMode): void {
@@ -204,6 +209,15 @@
       unit="fraction"
       label="Amount"
       onChange={setAmount}
+      size={42}
+    />
+    <Knob
+      value={chain.volume}
+      bounds={AMOUNT_BOUNDS}
+      defaultValue={0.5}
+      unit="fraction"
+      label="Volume"
+      onChange={setVolume}
       size={42}
     />
   </div>
@@ -380,7 +394,9 @@
 
   .knobs {
     display: flex;
-    justify-content: center;
+    flex-wrap: wrap;
+    justify-content: space-around;
+    gap: 0.3rem 0.2rem;
     padding: 0.3rem 0;
   }
 

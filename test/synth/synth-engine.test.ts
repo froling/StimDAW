@@ -126,6 +126,120 @@ test('evaluateKnob: dangling cable-ref → graceful fallback till base', () => {
   expect(evaluateKnob(knob, { min: 0, max: 200 }, 0, state)).toBe(100);
 });
 
+// ── evaluateKnob AMP-mode (post-fader VCA, headroom-clamp) ──────────
+
+test('evaluateKnob AMP: fader=0 → mute, oavsett LFO peak', () => {
+  // Det var BUG-fallet: gamla additive-modellen lät LFO peak väcka
+  // muted kanal från base=0 till max. Nya modellen: cap=0 → 0.
+  let state = emptyState();
+  state = addLfo(state);
+  state = addChannel(state, [ElectrodeMask.A, ElectrodeMask.B]);
+  state = addCable(state, state.lfos[0]!.id, state.channels[0]!.id, 'amplitude', 1.0);
+  const cableId = state.cables[0]!.id;
+  const knob: KnobState = { base: 0, modCableId: cableId };
+  // Vid sine peak (t=250_000, signal=+1): med AMP-mode ska output=0
+  expect(evaluateKnob(knob, { min: 0, max: 255 }, 250_000, state, 'amp')).toBe(0);
+});
+
+test('evaluateKnob AMP: fader=full + volume=0.5 + sine peak → cap', () => {
+  // Mittenlinje vid 0.5×255=127.5, headroom=127.5, peak swing=+127.5 → 255
+  let state = emptyState();
+  state = addLfo(state); // amount=1, volume=0.5 default
+  state = addChannel(state, [ElectrodeMask.A, ElectrodeMask.B]);
+  state = addCable(state, state.lfos[0]!.id, state.channels[0]!.id, 'amplitude', 1.0);
+  const cableId = state.cables[0]!.id;
+  const knob: KnobState = { base: 255, modCableId: cableId };
+  expect(evaluateKnob(knob, { min: 0, max: 255 }, 250_000, state, 'amp')).toBeCloseTo(255, 6);
+  // Sine valley: -127.5 → 0
+  expect(evaluateKnob(knob, { min: 0, max: 255 }, 750_000, state, 'amp')).toBeCloseTo(0, 6);
+});
+
+test('evaluateKnob AMP: vågformen ryms ALLTID inom [0, cap] (ingen clipping)', () => {
+  // Vid mid-fader, full LFO swing får inte exceeda fader-kanten
+  let state = emptyState();
+  state = addLfo(state);
+  state = addChannel(state, [ElectrodeMask.A, ElectrodeMask.B]);
+  state = addCable(state, state.lfos[0]!.id, state.channels[0]!.id, 'amplitude', 1.0);
+  const cableId = state.cables[0]!.id;
+  const cap = 128;
+  const knob: KnobState = { base: cap, modCableId: cableId };
+  // Sample över hela cykeln — ALL sample ska vara ∈ [0, 128]
+  for (let t = 0; t < 1_000_000; t += 25_000) {
+    const v = evaluateKnob(knob, { min: 0, max: 255 }, t, state, 'amp');
+    expect(v).toBeGreaterThanOrEqual(0);
+    expect(v).toBeLessThanOrEqual(cap);
+  }
+});
+
+test('evaluateKnob AMP: volume=0.8 skiftar centrumlinjen, swing krymps', () => {
+  // volume=0.8 → center=0.8×cap, headroom=min(0.8cap, 0.2cap)=0.2cap
+  // sine peak: swing=+0.2cap → effective=cap. valley: swing=-0.2cap → 0.6cap
+  let state = emptyState();
+  state = addLfo(state);
+  state.lfos[0]!.volume; // 0.5 default
+  state = { ...state, lfos: state.lfos.map((l) => ({ ...l, volume: 0.8 })) };
+  state = addChannel(state, [ElectrodeMask.A, ElectrodeMask.B]);
+  state = addCable(state, state.lfos[0]!.id, state.channels[0]!.id, 'amplitude', 1.0);
+  const cableId = state.cables[0]!.id;
+  const cap = 100;
+  const knob: KnobState = { base: cap, modCableId: cableId };
+  // Peak: center 80, +20 swing → 100
+  expect(evaluateKnob(knob, { min: 0, max: 255 }, 250_000, state, 'amp')).toBeCloseTo(100, 5);
+  // Valley: center 80, -20 swing → 60
+  expect(evaluateKnob(knob, { min: 0, max: 255 }, 750_000, state, 'amp')).toBeCloseTo(60, 5);
+});
+
+test('evaluateKnob AMP: volume=0 → silence (mute via volume)', () => {
+  let state = emptyState();
+  state = addLfo(state);
+  state = { ...state, lfos: state.lfos.map((l) => ({ ...l, volume: 0 })) };
+  state = addChannel(state, [ElectrodeMask.A, ElectrodeMask.B]);
+  state = addCable(state, state.lfos[0]!.id, state.channels[0]!.id, 'amplitude', 1.0);
+  const cableId = state.cables[0]!.id;
+  const knob: KnobState = { base: 200, modCableId: cableId };
+  // center=0, headroom=0 → swing=0 → output=0
+  expect(evaluateKnob(knob, { min: 0, max: 255 }, 250_000, state, 'amp')).toBe(0);
+});
+
+test('evaluateKnob AMP: volume=1 → DC vid cap (full top)', () => {
+  let state = emptyState();
+  state = addLfo(state);
+  state = { ...state, lfos: state.lfos.map((l) => ({ ...l, volume: 1 })) };
+  state = addChannel(state, [ElectrodeMask.A, ElectrodeMask.B]);
+  state = addCable(state, state.lfos[0]!.id, state.channels[0]!.id, 'amplitude', 1.0);
+  const cableId = state.cables[0]!.id;
+  const cap = 200;
+  const knob: KnobState = { base: cap, modCableId: cableId };
+  // center=cap, headroom=0 → ingen swing → konstant cap över hela cykeln
+  expect(evaluateKnob(knob, { min: 0, max: 255 }, 250_000, state, 'amp')).toBe(cap);
+  expect(evaluateKnob(knob, { min: 0, max: 255 }, 750_000, state, 'amp')).toBe(cap);
+});
+
+test('evaluateKnob AMP: amount=0 → konstant DC (ingen swing oavsett LFO shape)', () => {
+  let state = emptyState();
+  state = addLfo(state);
+  state = { ...state, lfos: state.lfos.map((l) => ({ ...l, amount: 0 })) };
+  state = addChannel(state, [ElectrodeMask.A, ElectrodeMask.B]);
+  state = addCable(state, state.lfos[0]!.id, state.channels[0]!.id, 'amplitude', 1.0);
+  const cableId = state.cables[0]!.id;
+  const cap = 200;
+  const knob: KnobState = { base: cap, modCableId: cableId };
+  // amount=0 → signal=0 → swing=0 → effective=center=0.5×cap=100
+  expect(evaluateKnob(knob, { min: 0, max: 255 }, 250_000, state, 'amp')).toBe(100);
+});
+
+test('evaluateKnob PW: oförändrad Reason-style additive (regression)', () => {
+  // PW behåller gamla beteendet — ingen volume, ingen headroom-clamp
+  let state = emptyState();
+  state = addLfo(state);
+  state = addChannel(state, [ElectrodeMask.A, ElectrodeMask.B]);
+  state = addCable(state, state.lfos[0]!.id, state.channels[0]!.id, 'pulseWidth', 1.0);
+  const cableId = state.cables[0]!.id;
+  const knob: KnobState = { base: 100, modCableId: cableId };
+  // PW-mode: signal=+1, depth=1, range=200 → swing=200, base+swing=300, clamp 200
+  expect(evaluateKnob(knob, { min: 0, max: 200 }, 250_000, state, 'pw')).toBeCloseTo(200, 5);
+});
+
 // ── SynthEngine tick semantics ──────────────────────────────────────
 
 test('engine: idle innan start, ingen emit', () => {

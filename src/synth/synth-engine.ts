@@ -141,18 +141,21 @@ export class SynthEngine {
       { min: PULSE_WIDTH_MIN_MICROS, max: PULSE_WIDTH_MAX_MICROS },
       tMicros,
       state,
+      'pw',
     );
     const paceEffective = evaluateKnob(
       ch.knobs.pace,
       { min: PACE_MIN_MICROS, max: PACE_MAX_MICROS },
       tMicros,
       state,
+      'pace',
     );
     const ampEffectiveRaw = evaluateKnob(
       ch.knobs.amplitude,
       { min: 0, max: AMPLITUDE_MAX },
       tMicros,
       state,
+      'amp',
     );
 
     // Single chokepoint amp clamp via safety/clamp.ts
@@ -219,11 +222,16 @@ export class SynthEngine {
  * mappat via depth × range → effective ∈ [base - range × depth, base +
  * range × depth], clampad till bounds.
  *
- * Full-range scaling (uppgraderat från range/2): LFO amount=100%, depth=
- * 100% kan svinga ±FULLA range. Det betyder att från base=min når LFO
- * max-bound, från base=max når LFO min-bound. Klampning gör asymmetriskt
- * arbete beroende på base-position. Tidigare range/2 begränsade swing
- * till halva — kunde inte topp-/bottna från extrem-base.
+ * Två modeller beroende på knobKind:
+ *
+ * - 'amp' (post-fader VCA): knob.base är AMP-fader = mute-cap. Modulator
+ *   positionerar mittenlinjen via volume × cap, swing håller sig inom
+ *   headroom = min(center, cap-center) → vågformen ryms ALLTID inom
+ *   [0, cap] (ingen AMP-orsakad clipping). Fader=0 → mute, oavsett LFO.
+ *
+ * - 'pw' / 'pace' (Reason-style additive): swing = signal × depth × range,
+ *   effective = clamp(base + swing). Hela range tillgängligt; min/max
+ *   är hardware-floors, inte mute-koncept.
  *
  * Combined med negative-boost mode: positiv swing = +range, negativ
  * swing = -2×range (extra deep-dive). Med negative-only mode: signal
@@ -236,6 +244,7 @@ export function evaluateKnob(
   bounds: { min: number; max: number },
   tMicros: number,
   state: MixerState,
+  knobKind: 'amp' | 'pw' | 'pace' = 'pw',
 ): number {
   if (knob.modCableId === null) {
     return clamp(knob.base, bounds.min, bounds.max);
@@ -248,7 +257,7 @@ export function evaluateKnob(
 
   // computeModulatorSignal dispatchar på modulator-typ (LFO med fri-fas
   // eller chain med phase-modell baserat på källa). Master-rate skalar alla
-  // LFO-rates uniformt.
+  // LFO-rates uniformt. Returnerar [-1..+1] × amount × ev. mode-transform.
   const signal = computeModulatorSignal(
     modulator,
     tMicros,
@@ -256,6 +265,20 @@ export function evaluateKnob(
     state.chains,
     state.masterRate,
   );
+
+  if (knobKind === 'amp') {
+    // Post-fader VCA: knob.base är cap. Modulatorns volume positionerar
+    // mittenlinjen, headroom-clamp garanterar att swing aldrig går utanför
+    // [0, cap]. Inget AMP-orsakat klipping av vågformen.
+    const cap = clamp(knob.base, 0, bounds.max);
+    if (cap <= 0) return 0; // fader=0 → mute, oavsett modulation
+    const center = modulator.volume * cap;
+    const headroom = Math.min(center, cap - center);
+    const swing = signal * cable.depth * headroom;
+    return clamp(center + swing, 0, cap);
+  }
+
+  // PW/PACE: Reason-style additive — full range tillgängligt
   const range = bounds.max - bounds.min;
   const swing = signal * cable.depth * range;
   return clamp(knob.base + swing, bounds.min, bounds.max);

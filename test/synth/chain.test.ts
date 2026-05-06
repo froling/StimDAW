@@ -111,6 +111,7 @@ test('effectiveChainPhase: dangling source → 0', () => {
     trigger: 'sync',
     shape: 'sine',
     amount: 1,
+    volume: 0.5,
     mode: 'bipolar',
   };
   expect(effectiveChainPhase(dangling, 250_000, 1, [], [dangling])).toBe(0);
@@ -119,8 +120,8 @@ test('effectiveChainPhase: dangling source → 0', () => {
 test('effectiveChainPhase: cycle-skydd via visited-set', () => {
   // Konstruera invalid state direkt med cycle (validateInvariants flaggar)
   const invalidChains: LfoChain[] = [
-    { id: 'chain-1', sourceId: 'chain-2', trigger: 'sync', shape: 'sine', amount: 1, mode: 'bipolar' },
-    { id: 'chain-2', sourceId: 'chain-1', trigger: 'sync', shape: 'sine', amount: 1, mode: 'bipolar' },
+    { id: 'chain-1', sourceId: 'chain-2', trigger: 'sync', shape: 'sine', amount: 1, volume: 0.5, mode: 'bipolar' },
+    { id: 'chain-2', sourceId: 'chain-1', trigger: 'sync', shape: 'sine', amount: 1, volume: 0.5, mode: 'bipolar' },
   ];
   // Ska terminera (inte stack-overflow) och returnera 0
   expect(effectiveChainPhase(invalidChains[0]!, 100_000, 1, [], invalidChains)).toBe(0);
@@ -246,6 +247,7 @@ test('computeChainSignal: dangling source → 0', () => {
     trigger: 'sync',
     shape: 'sine',
     amount: 1,
+    volume: 0.5,
     mode: 'bipolar',
   };
   expect(computeChainSignal(dangling, 250_000, [], [dangling])).toBe(0);
@@ -392,6 +394,7 @@ test('validateInvariants: dangling chain.sourceId flaggas', () => {
       trigger: 'sync' as const,
       shape: 'sine' as const,
       amount: 1,
+      volume: 0.5,
       mode: 'bipolar' as const,
     }],
     cables: [],
