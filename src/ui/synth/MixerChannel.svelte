@@ -13,9 +13,11 @@
   import Knob from './Knob.svelte';
   import VerticalFader from './VerticalFader.svelte';
   import {
+    synth,
     updateKnobBase,
     setChannelEnabled,
   } from './synth-store.svelte';
+  import { lfoColorAndLabel } from './cable-helpers';
   import { elconToLabel } from '../../patterns/types';
   import {
     PULSE_WIDTH_BOUNDS,
@@ -49,6 +51,25 @@
   function toggleEnabled(): void {
     setChannelEnabled(channel.id, !channel.enabled);
   }
+
+  /**
+   * För given knob: returnerar source-modulator-label ("L1", "C2") +
+   * färg om knob är modulerad, annars null. Visas under knob/fader-readout
+   * så user ser var modulationen kommer från (kompletterar mod-ring-färgen
+   * för color-blind a11y).
+   */
+  function sourceLabel(
+    modCableId: string | null,
+  ): { label: string; color: string } | null {
+    if (!modCableId) return null;
+    const cable = synth.current.cables.find((c) => c.id === modCableId);
+    if (!cable) return null;
+    return lfoColorAndLabel(synth.current.lfos, cable.sourceLfoId, synth.current.chains);
+  }
+
+  let pwSource = $derived(sourceLabel(channel.knobs.pulseWidth.modCableId));
+  let paceSource = $derived(sourceLabel(channel.knobs.pace.modCableId));
+  let ampSource = $derived(sourceLabel(channel.knobs.amplitude.modCableId));
 </script>
 
 <div
@@ -90,6 +111,9 @@
         size={40}
       />
     </div>
+    {#if pwSource}
+      <span class="in-label" style="color: {pwSource.color};">← {pwSource.label}</span>
+    {/if}
   </div>
 
   <div class="knob-row">
@@ -112,6 +136,9 @@
         size={40}
       />
     </div>
+    {#if paceSource}
+      <span class="in-label" style="color: {paceSource.color};">← {paceSource.label}</span>
+    {/if}
   </div>
 
   <!-- AMP-fader är drop-target för cables, så data-knob-port här också. -->
@@ -134,6 +161,9 @@
       width={28}
     />
   </div>
+  {#if ampSource}
+    <span class="in-label amp-in-label" style="color: {ampSource.color};">← {ampSource.label}</span>
+  {/if}
 </div>
 
 <style>
@@ -203,7 +233,20 @@
 
   .knob-row {
     display: flex;
-    justify-content: center;
+    flex-direction: column;
+    align-items: center;
+    gap: 1px;
+  }
+  .in-label {
+    font-family: ui-monospace, monospace;
+    font-size: 0.6rem;
+    font-weight: 600;
+    line-height: 1;
+    letter-spacing: 0.04em;
+  }
+  .amp-in-label {
+    /* Under AMP-fader, smal text */
+    margin-top: 0.15rem;
   }
 
   .knob-port {

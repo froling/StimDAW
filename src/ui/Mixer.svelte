@@ -30,6 +30,12 @@
    */
 
   let containerEl = $state<HTMLElement | null>(null);
+  /**
+   * Cable visibility-toggle. Default true (cables synliga). Toggles via
+   * "Hide cables"-knapp i mixer-controls — när routing är gjord vill user
+   * ofta dölja overlay:n så de inte är i vägen visuellt.
+   */
+  let cablesVisible = $state(true);
 
   /**
    * Mixerbord-seed: 9 fasta channels för de hardware-valid elcon-konfigs +
@@ -185,6 +191,16 @@
       {/if}
     </span>
     <div class="mixer-controls">
+      <button
+        type="button"
+        class="cable-toggle"
+        class:cables-hidden={!cablesVisible}
+        onclick={() => (cablesVisible = !cablesVisible)}
+        title={cablesVisible ? 'Hide cable-overlay (routing kvar)' : 'Show cable-overlay'}
+        data-testid="mixer-cable-toggle"
+      >
+        {cablesVisible ? '👁 Cables' : '👁 Cables (hidden)'}
+      </button>
       <label
         class="log-toggle"
         title="Logga varje descriptor till browser-konsolen ('synth-emit' prefix) + summary i CLI-panelen var 1s"
@@ -264,7 +280,7 @@
     </div>
   </div>
 
-  <CableLayer {containerEl} />
+  <CableLayer {containerEl} visible={cablesVisible} />
 
   <p class="footnote">
     Live source — synth-engine emits PtDescriptors event-driven per channel.
@@ -323,6 +339,24 @@
     display: inline-flex;
     align-items: center;
     gap: 0.6rem;
+  }
+  .cable-toggle {
+    padding: 0.3rem 0.6rem;
+    border: 1px solid #d0d0d0;
+    background: white;
+    border-radius: 4px;
+    cursor: pointer;
+    font-family: ui-monospace, monospace;
+    font-size: 0.72rem;
+    color: #555;
+  }
+  .cable-toggle:hover {
+    border-color: #0066cc;
+    color: #0066cc;
+  }
+  .cable-toggle.cables-hidden {
+    color: #aaa;
+    background: #fafafa;
   }
   .log-toggle {
     display: inline-flex;

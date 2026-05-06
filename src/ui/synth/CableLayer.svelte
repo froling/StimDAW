@@ -26,9 +26,12 @@
      *  i SVG-koordinatrymden. CableLayer beräknar port-positions relativt
      *  denna. Vanligtvis Mixer.svelte panel-elementet. */
     containerEl: HTMLElement | null;
+    /** Visa/dölj cable-overlay. Default true. När false renderas
+     *  ingenting (data oförändrat — bara visuellt dolt). */
+    visible?: boolean;
   };
 
-  let { containerEl }: Props = $props();
+  let { containerEl, visible = true }: Props = $props();
 
   type Pos = { x: number; y: number };
 
@@ -231,10 +234,14 @@
 
 <svg
   class="cable-layer"
+  class:hidden={!visible}
   xmlns="http://www.w3.org/2000/svg"
   role="presentation"
 >
-  <!-- Existerande cables -->
+  <!-- Existerande cables (renderas inte när visible=false — drag-state i
+       parent-Mixer kan fortsätta funka eftersom drag triggrar visible-
+       toggle implicit via container pointer-events). -->
+  {#if visible}
   {#each synth.current.cables as cable (cable.id)}
     {@const endpoints = cableEndpoints.get(cable.id)}
     {#if endpoints}
@@ -274,7 +281,10 @@
     {/if}
   {/each}
 
-  <!-- Ghost-cable under drag -->
+  {/if}
+
+  <!-- Ghost-cable under drag — visas alltid (även när visible=false) så
+       user ser drag-spår även med cables-hidden, så de kan rikta drop. -->
   {#if drag !== null}
     <path
       class="cable cable-ghost"

@@ -1,6 +1,7 @@
 <script lang="ts">
   import Knob from './Knob.svelte';
   import {
+    synth,
     setChainSource,
     setChainTrigger,
     setChainShape,
@@ -8,6 +9,7 @@
     setChainMode,
     removeChain,
   } from './synth-store.svelte';
+  import { elconToLabel } from '../../patterns/types';
   import type { ChainTrigger, LfoChain, LFO, WaveMode, WaveShape } from '../../synth/types';
 
   type Props = {
@@ -60,6 +62,20 @@
   ];
 
   let currentMode = $derived(chain.mode ?? 'bipolar');
+
+  /** Cable-targets från denna chain (samma format som LFOModule). */
+  function knobShort(knobName: 'pulseWidth' | 'pace' | 'amplitude'): string {
+    return knobName === 'pulseWidth' ? 'PW' : knobName === 'pace' ? 'PACE' : 'AMP';
+  }
+  let outTargets = $derived.by(() => {
+    return synth.current.cables
+      .filter((c) => c.sourceLfoId === chain.id)
+      .map((c) => {
+        const ch = synth.current.channels.find((x) => x.id === c.destChannelId);
+        const elconStr = ch ? elconToLabel(ch.elcon) : '?';
+        return { id: c.id, label: `${elconStr} ${knobShort(c.destKnobName)}` };
+      });
+  });
 
   function pickSource(e: Event): void {
     const newId = (e.currentTarget as HTMLSelectElement).value;
@@ -197,6 +213,14 @@
     <span class="port-dot" style="background: {color};"></span>
     <span class="port-label">OUT</span>
   </div>
+
+  {#if outTargets.length > 0}
+    <ul class="cable-targets" aria-label="Chain targets">
+      {#each outTargets as t (t.id)}
+        <li class="cable-target" style="color: {color};">→ {t.label}</li>
+      {/each}
+    </ul>
+  {/if}
 </div>
 
 <style>
@@ -385,5 +409,23 @@
     font-size: 0.65rem;
     color: #666;
     letter-spacing: 0.05em;
+  }
+
+  .cable-targets {
+    list-style: none;
+    margin: 0;
+    padding: 0.25rem 0.1rem 0;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+  }
+  .cable-target {
+    font-family: ui-monospace, monospace;
+    font-size: 0.62rem;
+    line-height: 1.2;
+    font-weight: 500;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 </style>
